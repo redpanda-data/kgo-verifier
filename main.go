@@ -64,6 +64,12 @@ func randomRead(nPartitions int32) {
 		offset := kgo.NewOffset().At(o)
 		log.Debugf("Read partition %d (%d-%d) at offset %d", p, pStart, pEnd, offset)
 
+		// Construct a map of topic->partition->offset to seek our new client to the right place
+		offsets := make(map[string]map[int32]kgo.Offset)
+		partOffsets := make(map[int32]kgo.Offset, 1)
+		partOffsets[p] = offset
+		offsets[*topic] = partOffsets
+
 		// Fully-baked client for actual consume
 		opts := []kgo.Opt{
 			kgo.MaxBufferedRecords(4096),
@@ -72,6 +78,7 @@ func randomRead(nPartitions int32) {
 			kgo.RequiredAcks(kgo.AllISRAcks()),
 			kgo.ConsumeResetOffset(offset),
 			kgo.ConsumeTopics(*topic),
+			kgo.ConsumePartitions(offsets),
 		}
 
 		client = newClient(opts)
