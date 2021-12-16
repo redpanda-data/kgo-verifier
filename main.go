@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	_ "net/http/pprof"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -95,6 +96,8 @@ func randomRead(nPartitions int32) {
 				}
 			}
 		}
+
+		runtime.GC()
 	}
 
 }
