@@ -72,14 +72,11 @@ func randomRead(nPartitions int32) {
 
 		// Fully-baked client for actual consume
 		opts := []kgo.Opt{
-			kgo.MaxBufferedRecords(4096),
-			kgo.ProducerBatchMaxBytes(1024 * 1024),
-			kgo.ProducerBatchCompression(kgo.NoCompression()),
-			kgo.RequiredAcks(kgo.AllISRAcks()),
-			kgo.ConsumeResetOffset(offset),
-			kgo.ConsumeTopics(*topic),
 			kgo.ConsumePartitions(offsets),
 		}
+
+		// FIXME(franz-go) - if you pass ConsumeResetOffset AND ConsumePartitions or ConsumeTopics, it accepts
+		// both but you don't get what you expect.
 
 		client = newClient(opts)
 
@@ -87,9 +84,12 @@ func randomRead(nPartitions int32) {
 		fetches := client.PollRecords(context.Background(), 1)
 		for _, f := range fetches {
 			for _, t := range f.Topics {
-				for _, p := range t.Partitions {
-					Chk(p.Err, "Consume error on partition")
-					for _, r := range p.Records {
+				for _, record_p := range t.Partitions {
+					Chk(record_p.Err, "Consume error on partition")
+					for _, r := range record_p.Records {
+						if r.Partition != p {
+							Die("Wrong partition %d in read at offset %d on partition %s/%d", r.Partition, r.Offset, *topic, p)
+						}
 						expect_key := fmt.Sprintf("%06d.%018d", 0, r.Offset)
 						log.Debugf("Consumed %s on p=%d at o=%d", r.Key, r.Partition, r.Offset)
 						if expect_key != string(r.Key) {
@@ -103,6 +103,7 @@ func randomRead(nPartitions int32) {
 				}
 			}
 		}
+		go client.Close()
 
 		runtime.GC()
 	}
