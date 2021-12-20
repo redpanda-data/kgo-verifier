@@ -50,6 +50,116 @@ var (
 	seqRead  = flag.Bool("seq_read", true, "Whether to do sequential read validation")
 )
 
+type OffsetRange struct {
+	Lower int64 // Inclusive
+	Upper int64 // Exclusive
+}
+
+type OffsetRanges struct {
+	Ranges []OffsetRange
+}
+
+func (ors *OffsetRanges) Insert(o int64) {
+	// Normal case: this is the next offset after the current range in flight
+
+	if len(ors.Ranges) == 0 {
+		ors.Ranges = append(ors.Ranges, OffsetRange{Lower: o, Upper: o + 1})
+		return
+	}
+
+	last := ors.Ranges[len(ors.Ranges)-1]
+	if o >= last.Lower && o == last.Upper {
+		last.Upper += 1
+		return
+	} else {
+		if o < last.Upper {
+			// TODO: more flexible structure for out of order inserts, at the moment
+			// we rely on franz-go callbacks being invoked in order.
+			Die("Out of order offset %d", o)
+		} else {
+			ors.Ranges = append(ors.Ranges, OffsetRange{Lower: o, Upper: o + 1})
+		}
+	}
+}
+
+func (ors *OffsetRanges) Contains(o int64) bool {
+	for _, r := range ors.Ranges {
+		if o >= r.Lower && o < r.Upper {
+			return true
+		}
+	}
+
+	return false
+}
+
+type TopicOffsetRanges struct {
+	PartitionRanges []OffsetRanges
+}
+
+func (tors *TopicOffsetRanges) Insert(p int32, o int64) {
+	tors.PartitionRanges[p].Insert(o)
+}
+
+func (tors *TopicOffsetRanges) Contains(p int32, o int64) bool {
+	return tors.PartitionRanges[p].Contains(o)
+}
+
+func topicOffsetRangeFile() string {
+	return fmt.Sprintf("valid_offsets_%s.json", *topic)
+}
+
+func (tors *TopicOffsetRanges) Store() error {
+	log.Infof("TopicOffsetRanges::Storing...")
+	data, err := json.Marshal(tors)
+	if err != nil {
+		return err
+	}
+	err = ioutil.WriteFile("valid_offsets.json", data, 0644)
+	if err != nil {
+		return err
+	}
+
+	for p, or := range tors.PartitionRanges {
+		log.Debugf("TopicOffsetRanges::Store: %d %d", p, len(or.Ranges))
+	}
+
+	return nil
+}
+
+func NewTopicOffsetRanges(nPartitions int32) TopicOffsetRanges {
+	prs := make([]OffsetRanges, nPartitions)
+	for _, or := range prs {
+		or.Ranges = make([]OffsetRange, 0)
+	}
+	return TopicOffsetRanges{
+		PartitionRanges: prs,
+	}
+}
+
+func LoadTopicOffsetRanges(nPartitions int32) TopicOffsetRanges {
+	data, err := ioutil.ReadFile("valid_offsets.json")
+	if err != nil {
+		// Pass, assume it's not existing yet
+		return NewTopicOffsetRanges(nPartitions)
+	} else {
+		var tors TopicOffsetRanges
+		if len(data) > 0 {
+			err = json.Unmarshal(data, &tors)
+			Chk(err, "Bad JSON %v", err)
+		}
+
+		if int32(len(tors.PartitionRanges)) > nPartitions {
+			Die("More partitions in valid_offsets file than in topic!")
+		} else if len(tors.PartitionRanges) < int(nPartitions) {
+			// Creating new partitions is allowed
+			blanks := make([]OffsetRanges, nPartitions-int32(len(tors.PartitionRanges)))
+			tors.PartitionRanges = append(tors.PartitionRanges, blanks...)
+		}
+
+		return tors
+	}
+}
+
 func sequentialRead(nPartitions int32) {
 	client := newClient(nil)
 	hwm := getOffsets(client, nPartitions, -1)
@@ -82,6 +192,8 @@ func sequentialReadInner(nPartitions int32, startAt []int64, upTo []int64) ([]in
 	}
 	offsets[*topic] = partOffsets
 
+	validRanges := LoadTopicOffsetRanges(nPartitions)
+
 	opts := []kgo.Opt{
 		kgo.ConsumePartitions(offsets),
 	}
@@ -112,13 +224,11 @@ func sequentialReadInner(nPartitions int32, startAt []int64, upTo []int64) ([]in
 				complete[r.Partition] = true
 			}
 
-			validateRecord(r)
+			validateRecord(r, &validRanges)
 		})
 
 		any_incomplete := false
-		for i, c := range complete {
-			log.Debugf("complete[%d] %v", i, c)
-
+		for _, c := range complete {
 			if !c {
 				any_incomplete = true
 			}
@@ -133,25 +243,16 @@ func sequentialReadInner(nPartitions int32, startAt []int64, upTo []int64) ([]in
 	return last_read, nil
 }
 
-func validateRecord(r *kgo.Record) {
+func validateRecord(r *kgo.Record, validRanges *TopicOffsetRanges) {
 	expect_key := fmt.Sprintf("%06d.%018d", 0, r.Offset)
 	log.Debugf("Consumed %s on p=%d at o=%d", r.Key, r.Partition, r.Offset)
 	if expect_key != string(r.Key) {
+		shouldBeValid := validRanges.Contains(r.Partition, r.Offset)
 
-		// Check bad offset list
-		vm := LoadValidMap()
-		ignore_offset := false
-		for _, o := range vm.badOffsets {
-			if o.P == r.Partition && o.O == r.Offset {
-				ignore_offset = true
-				break
-			}
-		}
-
-		if !ignore_offset {
+		if shouldBeValid {
 			Die("Bad read at offset %d on partition %s/%d.  Expect '%s', found '%s'", r.Offset, *topic, r.Partition, expect_key, r.Key)
 		} else {
-			log.Infof("Ignoring read validation at known-bad offset %s/%d %d", *topic, r.Partition, r.Offset)
+			log.Infof("Ignoring read validation at offset outside valid range %s/%d %d", *topic, r.Partition, r.Offset)
 		}
 	} else {
 		log.Debugf("Read OK (%s) on p=%d at o=%d", r.Key, r.Partition, r.Offset)
@@ -171,6 +272,8 @@ func randomRead(nPartitions int32) {
 	// on the same client, the second one gets not_leader errors
 	// for a couple of partitions (but not on all topics!  I just
 	// had one topic that was in this state)
+
+	validRanges := LoadTopicOffsetRanges(nPartitions)
 
 	// Select a partition and location
 	log.Infof("Reading %d random offsets", *cCount)
@@ -213,7 +316,7 @@ func randomRead(nPartitions int32) {
 						if r.Partition != p {
 							Die("Wrong partition %d in read at offset %d on partition %s/%d", r.Partition, r.Offset, *topic, p)
 						}
-						validateRecord(r)
+						validateRecord(r, &validRanges)
 					}
 
 				}
@@ -285,7 +388,10 @@ func getOffsetsInner(client *kgo.Client, nPartitions int32, t int64) ([]int64, e
 	shards := client.RequestSharded(context.Background(), req)
 	var r_err error
 	allFailed := kafka.EachShard(req, shards, func(shard kgo.ResponseShard) {
-
+		if shard.Err != nil {
+			r_err = shard.Err
+			return
+		}
 		resp := shard.Resp.(*kmsg.ListOffsetsResponse)
 		for _, partition := range resp.Topics[0].Partitions {
 			if partition.ErrorCode != 0 {
@@ -312,24 +418,6 @@ func getOffsetsInner(client *kgo.Client, nPartitions int32, t int64) ([]int64, e
 	return pOffsets, r_err
 }
 
-type ValidMap struct {
-	badOffsets []BadOffset
-}
-
-func LoadValidMap() ValidMap {
-	data, err := ioutil.ReadFile("bad_offsets.json")
-	if err != nil {
-		// Pass, assume it's not existing yet
-	}
-	var all_bad_offsets []BadOffset
-	if len(data) > 0 {
-		err = json.Unmarshal(data, &all_bad_offsets)
-		Chk(err, "Bad JSON %v", err)
-	}
-
-	return ValidMap{badOffsets: all_bad_offsets}
-}
-
 func produce(nPartitions int32) {
 	n := int64(*pCount)
 	for {
@@ -337,14 +425,7 @@ func produce(nPartitions int32) {
 		n = n - n_produced
 
 		if len(bad_offsets) > 0 {
-			log.Warnf("Produce stopped early, %d still to do", n)
-			log.Warnf("Storing bad offsets...")
-			vm := LoadValidMap()
-			all_bad_offsets := vm.badOffsets
-			all_bad_offsets = append(all_bad_offsets, bad_offsets...)
-			data, err := json.Marshal(all_bad_offsets)
-			err = ioutil.WriteFile("bad_offsets.json", data, 0644)
-			Chk(err, "Bad Write")
+			log.Infof("Produce stopped early, %d still to do", n)
 		}
 
 		if n <= 0 {
@@ -369,6 +450,8 @@ func produceInner(n int64, nPartitions int32) (int64, []BadOffset) {
 	}
 	client := newClient(opts)
 
+	validOffsets := LoadTopicOffsetRanges(nPartitions)
+
 	nextOffset := getOffsets(client, nPartitions, -1)
 
 	for i, o := range nextOffset {
@@ -385,6 +468,9 @@ func produceInner(n int64, nPartitions int32) (int64, []BadOffset) {
 	concurrent := semaphore.NewWeighted(4096)
 
 	log.Infof("Producing %d messages (%d bytes)", n, *mSize)
+
+	storeEveryN := 10000
+
 	for i := int64(0); i < n && len(bad_offsets) == 0; i = i + 1 {
 		concurrent.Acquire(context.Background(), 1)
 		produced += 1
@@ -402,21 +488,35 @@ func produceInner(n int64, nPartitions int32) (int64, []BadOffset) {
 			concurrent.Release(1)
 			Chk(err, "Produce failed!")
 			if expect_offset != r.Offset {
-				// Shouldn't happen unless idempotence fails to do its thing
-				//Die("Produced at unexpected offset %d (expected %d) on partition %d", r.Offset, expect_offset, r.Partition)
 				log.Warnf("Produced at unexpected offset %d (expected %d) on partition %d", r.Offset, expect_offset, r.Partition)
 				bad_offsets <- BadOffset{r.Partition, r.Offset}
 				errored = true
 				log.Debugf("errored = %b", errored)
 			} else {
+				validOffsets.Insert(r.Partition, r.Offset)
 				log.Debugf("Wrote partition %d at %d", r.Partition, r.Offset)
 			}
 			wg.Done()
 		}
 		client.Produce(context.Background(), r, handler)
+
+		// Not strictly necessary, but useful if a long running producer gets killed
+		// before finishing
+		if i%int64(storeEveryN) == 0 && i != 0 {
+			err := validOffsets.Store()
+			Chk(err, "Error writing interim results: %v", err)
+		}
 	}
+
+	log.Info("Waiting...")
+	wg.Wait()
+	log.Info("Waited.")
 	wg.Wait()
 	close(bad_offsets)
+
+	err := validOffsets.Store()
+	Chk(err, "Error writing interim results: %v", err)
+
 	if errored {
 		log.Warnf("%d bad offsets", len(bad_offsets))
 		var r []BadOffset
