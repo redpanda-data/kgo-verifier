@@ -280,6 +280,7 @@ func getOffsetsInner(client *kgo.Client, nPartitions int32, t int64) ([]int64, e
 		}
 	*/
 
+	seenPartitions := int32(0)
 	// FIXME: franz-go fails in weird ways if RequestSharded isn't used
 	shards := client.RequestSharded(context.Background(), req)
 	var r_err error
@@ -292,12 +293,20 @@ func getOffsetsInner(client *kgo.Client, nPartitions int32, t int64) ([]int64, e
 				r_err = kerr.ErrorForCode(partition.ErrorCode)
 			}
 			pOffsets[partition.Partition] = partition.Offset
+			seenPartitions += 1
 			log.Debugf("Partition %d offset %d", partition.Partition, pOffsets[partition.Partition])
 		}
 	})
 
 	if allFailed {
 		return nil, errors.New("All offset requests failed")
+	}
+
+	if seenPartitions < nPartitions {
+		// The results may be partial, simply omitting some partitions while not
+		// raising any error.  We transform this into an error to avoid wrongly
+		// returning a 0 offset for any missing partitions
+		return nil, errors.New("Didn't get data for all partitions")
 	}
 
 	return pOffsets, r_err
@@ -361,6 +370,10 @@ func produceInner(n int64, nPartitions int32) (int64, []BadOffset) {
 	client := newClient(opts)
 
 	nextOffset := getOffsets(client, nPartitions, -1)
+
+	for i, o := range nextOffset {
+		log.Infof("Produce start offset %s/%d %d...", *topic, i, o)
+	}
 
 	var wg sync.WaitGroup
 
