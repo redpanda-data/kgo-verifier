@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -20,6 +21,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 	"github.com/twmb/franz-go/pkg/sasl/scram"
+	"github.com/vectorizedio/redpanda/src/go/rpk/pkg/kafka"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -160,8 +162,15 @@ func validateRecord(r *kgo.Record) {
 func randomRead(nPartitions int32) {
 	// Basic client to read offsets
 	client := newClient(make([]kgo.Opt, 0))
-	startOffsets := getOffsets(client, nPartitions, -2)
 	endOffsets := getOffsets(client, nPartitions, -1)
+	client.Close()
+	client = newClient(make([]kgo.Opt, 0))
+	startOffsets := getOffsets(client, nPartitions, -2)
+	client.Close()
+	// FIXME: Weird franz-go bug?  When I use getOffsets twice
+	// on the same client, the second one gets not_leader errors
+	// for a couple of partitions (but not on all topics!  I just
+	// had one topic that was in this state)
 
 	// Select a partition and location
 	log.Infof("Reading %d random offsets", *cCount)
@@ -210,7 +219,8 @@ func randomRead(nPartitions int32) {
 				}
 			}
 		}
-		go client.Close()
+		client.Flush(context.Background())
+		client.Close()
 
 		runtime.GC()
 	}
@@ -262,19 +272,32 @@ func getOffsetsInner(client *kgo.Client, nPartitions int32, t int64) ([]int64, e
 
 	req.Topics = append(req.Topics, reqTopic)
 
-	resp, err := req.RequestWith(context.Background(), client)
-	if err != nil {
-		log.Warnf("unable to request topic %s metadata: %v", *topic, err)
-		return nil, err
-	}
-	var r_err error
-	for _, partition := range resp.Topics[0].Partitions {
-		if partition.ErrorCode != 0 {
-			log.Warnf("error fetching %s/%d metadata: %v", *topic, partition.Partition, kerr.ErrorForCode(partition.ErrorCode))
-			r_err = kerr.ErrorForCode(partition.ErrorCode)
+	/*
+		resp, err := req.RequestWith(context.Background(), client)
+		if err != nil {
+			log.Warnf("unable to request topic %s metadata: %v", *topic, err)
+			return nil, err
 		}
-		pOffsets[partition.Partition] = partition.Offset
-		log.Debugf("Partition %d offset %d", partition.Partition, pOffsets[partition.Partition])
+	*/
+
+	// FIXME: franz-go fails in weird ways if RequestSharded isn't used
+	shards := client.RequestSharded(context.Background(), req)
+	var r_err error
+	allFailed := kafka.EachShard(req, shards, func(shard kgo.ResponseShard) {
+
+		resp := shard.Resp.(*kmsg.ListOffsetsResponse)
+		for _, partition := range resp.Topics[0].Partitions {
+			if partition.ErrorCode != 0 {
+				log.Warnf("error fetching %s/%d metadata: %v", *topic, partition.Partition, kerr.ErrorForCode(partition.ErrorCode))
+				r_err = kerr.ErrorForCode(partition.ErrorCode)
+			}
+			pOffsets[partition.Partition] = partition.Offset
+			log.Debugf("Partition %d offset %d", partition.Partition, pOffsets[partition.Partition])
+		}
+	})
+
+	if allFailed {
+		return nil, errors.New("All offset requests failed")
 	}
 
 	return pOffsets, r_err
@@ -431,6 +454,7 @@ func main() {
 
 	log.Info("Getting topic metadata...")
 	client := newClient(make([]kgo.Opt, 0))
+
 	var t kmsg.MetadataResponseTopic
 	{
 		req := kmsg.NewPtrMetadataRequest()
@@ -451,6 +475,11 @@ func main() {
 
 	nPartitions := int32(len(t.Partitions))
 	log.Debugf("Targeting topic %s with %d partitions", *topic, nPartitions)
+
+	/*
+		getOffsets(client, nPartitions, -1)
+		return
+	*/
 
 	// Prepare: write out several segments
 	if *pCount > 0 {
