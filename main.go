@@ -45,8 +45,8 @@ var (
 	username     = flag.String("username", "", "SASL username")
 	password     = flag.String("password", "", "SASL password")
 	mSize        = flag.Int("msg_size", 16384, "Size of messages to produce")
-	pCount       = flag.Int("produce_msgs", 100000, "Number of messages to produce")
-	cCount       = flag.Int("consume_msgs", 100, "Number of validation reads to do")
+	pCount       = flag.Int("produce_msgs", 1000, "Number of messages to produce")
+	cCount       = flag.Int("rand_read_msgs", 10, "Number of validation reads to do")
 	seqRead      = flag.Bool("seq_read", true, "Whether to do sequential read validation")
 	parallelRead = flag.Int("parallel", 1, "How many readers to run in parallel")
 )
@@ -262,6 +262,10 @@ func validateRecord(r *kgo.Record, validRanges *TopicOffsetRanges) {
 }
 
 func randomRead(nPartitions int32) {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	log.Infof("Allocated bytes >>randomRead: %d", m.Alloc)
+
 	// Basic client to read offsets
 	client := newClient(make([]kgo.Opt, 0))
 	endOffsets := getOffsets(client, nPartitions, -1)
@@ -270,6 +274,9 @@ func randomRead(nPartitions int32) {
 	startOffsets := getOffsets(client, nPartitions, -2)
 	client.Close()
 	runtime.GC()
+
+	runtime.ReadMemStats(&m)
+	log.Infof("Allocated bytes after read offsets: %d", m.Alloc)
 
 	// FIXME: Weird franz-go bug?  When I use getOffsets twice
 	// on the same client, the second one gets not_leader errors
@@ -307,10 +314,13 @@ func randomRead(nPartitions int32) {
 		// FIXME(franz-go) - if you pass ConsumeResetOffset AND ConsumePartitions or ConsumeTopics, it accepts
 		// both but you don't get what you expect.
 
+		runtime.ReadMemStats(&m)
+		log.Infof("Allocated bytes before newClient: %d", m.Alloc)
 		client = newClient(opts)
 
 		// Read one record
 		fetches := client.PollRecords(context.Background(), 1)
+
 		for _, f := range fetches {
 			for _, t := range f.Topics {
 				for _, record_p := range t.Partitions {
@@ -325,10 +335,16 @@ func randomRead(nPartitions int32) {
 				}
 			}
 		}
+		runtime.ReadMemStats(&m)
+		log.Infof("Allocated bytes pre-close: %d", m.Alloc)
+
 		client.Flush(context.Background())
 		client.Close()
-
 		runtime.GC()
+
+		runtime.ReadMemStats(&m)
+		log.Infof("Allocated bytes post-close: %d", m.Alloc)
+
 	}
 
 }
