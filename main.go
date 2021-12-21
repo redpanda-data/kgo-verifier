@@ -38,16 +38,17 @@ func Chk(err error, msg string, args ...interface{}) {
 }
 
 var (
-	debug    = flag.Bool("debug", false, "Enable verbose logging")
-	trace    = flag.Bool("trace", false, "Enable super-verbose (franz-go internals)")
-	brokers  = flag.String("brokers", "localhost:9092", "comma delimited list of brokers")
-	topic    = flag.String("topic", "", "topic to produce to or consume from")
-	username = flag.String("username", "", "SASL username")
-	password = flag.String("password", "", "SASL password")
-	mSize    = flag.Int("msg_size", 16384, "Size of messages to produce")
-	pCount   = flag.Int("produce_msgs", 100000, "Number of messages to produce")
-	cCount   = flag.Int("consume_msgs", 100, "Number of validation reads to do")
-	seqRead  = flag.Bool("seq_read", true, "Whether to do sequential read validation")
+	debug        = flag.Bool("debug", false, "Enable verbose logging")
+	trace        = flag.Bool("trace", false, "Enable super-verbose (franz-go internals)")
+	brokers      = flag.String("brokers", "localhost:9092", "comma delimited list of brokers")
+	topic        = flag.String("topic", "", "topic to produce to or consume from")
+	username     = flag.String("username", "", "SASL username")
+	password     = flag.String("password", "", "SASL password")
+	mSize        = flag.Int("msg_size", 16384, "Size of messages to produce")
+	pCount       = flag.Int("produce_msgs", 100000, "Number of messages to produce")
+	cCount       = flag.Int("consume_msgs", 100, "Number of validation reads to do")
+	seqRead      = flag.Bool("seq_read", true, "Whether to do sequential read validation")
+	parallelRead = flag.Int("parallel", 1, "How many readers to run in parallel")
 )
 
 type OffsetRange struct {
@@ -268,6 +269,8 @@ func randomRead(nPartitions int32) {
 	client = newClient(make([]kgo.Opt, 0))
 	startOffsets := getOffsets(client, nPartitions, -2)
 	client.Close()
+	runtime.GC()
+
 	// FIXME: Weird franz-go bug?  When I use getOffsets twice
 	// on the same client, the second one gets not_leader errors
 	// for a couple of partitions (but not on all topics!  I just
@@ -589,23 +592,45 @@ func main() {
 	nPartitions := int32(len(t.Partitions))
 	log.Debugf("Targeting topic %s with %d partitions", *topic, nPartitions)
 
-	/*
-		getOffsets(client, nPartitions, -1)
-		return
-	*/
-
-	// Prepare: write out several segments
 	if *pCount > 0 {
 		produce(nPartitions)
 	}
 
-	if *seqRead {
-		sequentialRead(nPartitions)
-	}
+	if *parallelRead <= 1 {
+		if *seqRead {
+			sequentialRead(nPartitions)
+		}
 
-	// Main stage: continue to write, while running random reader in background
-	if *cCount > 0 {
-		randomRead(nPartitions)
+		if *cCount > 0 {
+			randomRead(nPartitions)
+		}
+	} else {
+		var wg sync.WaitGroup
+		if *seqRead {
+			wg.Add(1)
+			go func() {
+				sequentialRead(nPartitions)
+				wg.Done()
+			}()
+		}
+
+		parallelRandoms := *parallelRead
+		if *seqRead {
+			parallelRandoms -= 1
+		}
+
+		if *cCount > 0 {
+			for i := 0; i < parallelRandoms; i++ {
+				wg.Add(1)
+				go func() {
+					randomRead(nPartitions)
+					wg.Done()
+				}()
+			}
+		}
+
+		wg.Wait()
+
 	}
 
 }
