@@ -316,6 +316,7 @@ func randomRead(nPartitions int32) {
 
 		runtime.ReadMemStats(&m)
 		log.Infof("Allocated bytes before newClient: %d", m.Alloc)
+		log.Infof("Num goroutines before newClient: %d", runtime.NumGoroutine())
 		client = newClient(opts)
 
 		// Read one record
@@ -326,6 +327,7 @@ func randomRead(nPartitions int32) {
 			}
 			validateRecord(r, &validRanges)
 		})
+		fetches = nil
 
 		runtime.ReadMemStats(&m)
 		log.Infof("Allocated bytes pre-close: %d", m.Alloc)
