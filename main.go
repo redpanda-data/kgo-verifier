@@ -9,9 +9,9 @@ import (
 	"fmt"
 	"io/ioutil"
 	"math/rand"
-	_ "net/http/pprof"
 	"os"
 	"runtime"
+	"runtime/pprof"
 	"strings"
 	"sync"
 	"time"
@@ -320,21 +320,13 @@ func randomRead(nPartitions int32) {
 
 		// Read one record
 		fetches := client.PollRecords(context.Background(), 1)
-
-		for _, f := range fetches {
-			for _, t := range f.Topics {
-				for _, record_p := range t.Partitions {
-					Chk(record_p.Err, "Consume error on partition")
-					for _, r := range record_p.Records {
-						if r.Partition != p {
-							Die("Wrong partition %d in read at offset %d on partition %s/%d", r.Partition, r.Offset, *topic, p)
-						}
-						validateRecord(r, &validRanges)
-					}
-
-				}
+		fetches.EachRecord(func(r *kgo.Record) {
+			if r.Partition != p {
+				Die("Wrong partition %d in read at offset %d on partition %s/%d", r.Partition, r.Offset, *topic, p)
 			}
-		}
+			validateRecord(r, &validRanges)
+		})
+
 		runtime.ReadMemStats(&m)
 		log.Infof("Allocated bytes pre-close: %d", m.Alloc)
 
@@ -344,6 +336,11 @@ func randomRead(nPartitions int32) {
 
 		runtime.ReadMemStats(&m)
 		log.Infof("Allocated bytes post-close: %d", m.Alloc)
+		if false {
+			prof_file, err := os.OpenFile("out.bin", os.O_CREATE|os.O_RDWR, 0755)
+			Chk(err, "opening heap file %v", err)
+			pprof.WriteHeapProfile(prof_file)
+		}
 
 	}
 
