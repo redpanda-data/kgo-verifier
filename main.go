@@ -67,7 +67,7 @@ func (ors *OffsetRanges) Insert(o int64) {
 		return
 	}
 
-	last := ors.Ranges[len(ors.Ranges)-1]
+	last := &ors.Ranges[len(ors.Ranges)-1]
 	if o >= last.Lower && o == last.Upper {
 		last.Upper += 1
 		return
@@ -109,12 +109,12 @@ func topicOffsetRangeFile() string {
 }
 
 func (tors *TopicOffsetRanges) Store() error {
-	log.Infof("TopicOffsetRanges::Storing...")
+	log.Infof("TopicOffsetRanges::Storing %s...", topicOffsetRangeFile())
 	data, err := json.Marshal(tors)
 	if err != nil {
 		return err
 	}
-	err = ioutil.WriteFile("valid_offsets.json", data, 0644)
+	err = ioutil.WriteFile(topicOffsetRangeFile(), data, 0644)
 	if err != nil {
 		return err
 	}
@@ -137,7 +137,7 @@ func NewTopicOffsetRanges(nPartitions int32) TopicOffsetRanges {
 }
 
 func LoadTopicOffsetRanges(nPartitions int32) TopicOffsetRanges {
-	data, err := ioutil.ReadFile("valid_offsets.json")
+	data, err := ioutil.ReadFile(topicOffsetRangeFile())
 	if err != nil {
 		// Pass, assume it's not existing yet
 		return NewTopicOffsetRanges(nPartitions)
