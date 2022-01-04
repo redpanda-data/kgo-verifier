@@ -262,9 +262,6 @@ func validateRecord(r *kgo.Record, validRanges *TopicOffsetRanges) {
 }
 
 func randomRead(nPartitions int32) {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	log.Infof("Allocated bytes >>randomRead: %d", m.Alloc)
 
 	// Basic client to read offsets
 	client := newClient(make([]kgo.Opt, 0))
@@ -274,9 +271,6 @@ func randomRead(nPartitions int32) {
 	startOffsets := getOffsets(client, nPartitions, -2)
 	client.Close()
 	runtime.GC()
-
-	runtime.ReadMemStats(&m)
-	log.Infof("Allocated bytes after read offsets: %d", m.Alloc)
 
 	// FIXME: Weird franz-go bug?  When I use getOffsets twice
 	// on the same client, the second one gets not_leader errors
@@ -314,9 +308,6 @@ func randomRead(nPartitions int32) {
 		// FIXME(franz-go) - if you pass ConsumeResetOffset AND ConsumePartitions or ConsumeTopics, it accepts
 		// both but you don't get what you expect.
 
-		runtime.ReadMemStats(&m)
-		log.Infof("Allocated bytes before newClient: %d", m.Alloc)
-		log.Infof("Num goroutines before newClient: %d", runtime.NumGoroutine())
 		client = newClient(opts)
 
 		// Read one record
@@ -329,15 +320,13 @@ func randomRead(nPartitions int32) {
 		})
 		fetches = nil
 
-		runtime.ReadMemStats(&m)
-		log.Infof("Allocated bytes pre-close: %d", m.Alloc)
-
 		client.Flush(context.Background())
 		client.Close()
 		runtime.GC()
 
+		var m runtime.MemStats
 		runtime.ReadMemStats(&m)
-		log.Infof("Allocated bytes post-close: %d", m.Alloc)
+		log.Debugf("After close bytes: %d goroutines: %d", m.Alloc, runtime.NumGoroutine())
 		if false {
 			prof_file, err := os.OpenFile("out.bin", os.O_CREATE|os.O_RDWR, 0755)
 			Chk(err, "opening heap file %v", err)
@@ -392,14 +381,6 @@ func getOffsetsInner(client *kgo.Client, nPartitions int32, t int64) ([]int64, e
 	}
 
 	req.Topics = append(req.Topics, reqTopic)
-
-	/*
-		resp, err := req.RequestWith(context.Background(), client)
-		if err != nil {
-			log.Warnf("unable to request topic %s metadata: %v", *topic, err)
-			return nil, err
-		}
-	*/
 
 	seenPartitions := int32(0)
 	// FIXME: franz-go fails in weird ways if RequestSharded isn't used
