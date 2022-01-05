@@ -534,15 +534,17 @@ func produceInner(n int64, nPartitions int32) (int64, []BadOffset) {
 }
 
 func newClient(opts []kgo.Opt) *kgo.Client {
-	auth_mech := scram.Auth{
-		User: *username,
-		Pass: *password,
+	// Disable auth if username not given
+	if len(*username) > 0 {
+		auth_mech := scram.Auth{
+			User: *username,
+			Pass: *password,
+		}
+		auth := auth_mech.AsSha256Mechanism()
+		opts = append(opts,
+			kgo.SASL(auth))
 	}
 
-	auth := auth_mech.AsSha256Mechanism()
-
-	opts = append(opts,
-		kgo.SASL(auth))
 	opts = append(opts,
 		kgo.SeedBrokers(strings.Split(*brokers, ",")...))
 
