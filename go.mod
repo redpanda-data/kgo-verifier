@@ -4,8 +4,10 @@ go 1.17
 
 require (
 	github.com/sirupsen/logrus v1.8.1
-	github.com/twmb/franz-go v1.2.4
-	github.com/twmb/franz-go/pkg/kmsg v0.0.0-20211116073102-087920707afe
+	github.com/twmb/franz-go v1.3.0
+	github.com/twmb/franz-go/pkg/kmsg v0.0.0-20211127185622-3b34db0c6d1e
+	github.com/vectorizedio/redpanda/src/go/rpk v0.0.0-20211217123319-86af7226d9f0
+	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
 )
 
 require (
@@ -29,9 +31,7 @@ require (
 	github.com/twmb/franz-go/pkg/kadm v0.0.0-20211116225244-e97ad6b8ef3e // indirect
 	github.com/twmb/go-rbtree v1.0.0 // indirect
 	github.com/twmb/tlscfg v1.2.0 // indirect
-	github.com/vectorizedio/redpanda/src/go/rpk v0.0.0-20211217123319-86af7226d9f0 // indirect
-	golang.org/x/crypto v0.0.0-20210817164053-32db794688a5 // indirect
-	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c // indirect
+	golang.org/x/crypto v0.0.0-20211117183948-ae814b36b871 // indirect
 	golang.org/x/sys v0.0.0-20211101204403-39c9dd37992c // indirect
 	golang.org/x/text v0.3.7 // indirect
 	gopkg.in/ini.v1 v1.51.0 // indirect
