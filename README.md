@@ -18,13 +18,6 @@ offset, and writes it out to a file.  Consumers then consult this file while rea
 to check whether a particular offset is expected to contain a valid message (i.e. key
 matches offset) or not.
 
-# Important caveats
-
-To do random reads, we repeatedly construct and destroy franz-go clients.  This can
-result in increasing memory consumption, so keep the number of random reads per
-execution low (i.e. below 100).  To run a continuous random reader, just wrap
-the tool in a while loop.
-
 # Usage
 
 - Brokers must not use TLS (in BYOC that means run this script inside your k8s cluster
