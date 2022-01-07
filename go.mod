@@ -4,7 +4,7 @@ go 1.17
 
 require (
 	github.com/sirupsen/logrus v1.8.1
-	github.com/twmb/franz-go v1.3.0
+	github.com/twmb/franz-go v1.3.1
 	github.com/twmb/franz-go/pkg/kmsg v0.0.0-20211127185622-3b34db0c6d1e
 	github.com/vectorizedio/redpanda/src/go/rpk v0.0.0-20211217123319-86af7226d9f0
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c

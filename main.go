@@ -272,11 +272,6 @@ func randomRead(nPartitions int32) {
 	client.Close()
 	runtime.GC()
 
-	// FIXME: Weird franz-go bug?  When I use getOffsets twice
-	// on the same client, the second one gets not_leader errors
-	// for a couple of partitions (but not on all topics!  I just
-	// had one topic that was in this state)
-
 	validRanges := LoadTopicOffsetRanges(nPartitions)
 
 	// Select a partition and location
@@ -304,9 +299,6 @@ func randomRead(nPartitions int32) {
 		opts := []kgo.Opt{
 			kgo.ConsumePartitions(offsets),
 		}
-
-		// FIXME(franz-go) - if you pass ConsumeResetOffset AND ConsumePartitions or ConsumeTopics, it accepts
-		// both but you don't get what you expect.
 
 		client = newClient(opts)
 
@@ -383,7 +375,6 @@ func getOffsetsInner(client *kgo.Client, nPartitions int32, t int64) ([]int64, e
 	req.Topics = append(req.Topics, reqTopic)
 
 	seenPartitions := int32(0)
-	// FIXME: franz-go fails in weird ways if RequestSharded isn't used
 	shards := client.RequestSharded(context.Background(), req)
 	var r_err error
 	allFailed := kafka.EachShard(req, shards, func(shard kgo.ResponseShard) {
