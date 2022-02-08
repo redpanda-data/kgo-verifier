@@ -11,7 +11,6 @@ import (
 	"math/rand"
 	"os"
 	"runtime"
-	"runtime/pprof"
 	"strings"
 	"sync"
 	"time"
@@ -261,8 +260,7 @@ func validateRecord(r *kgo.Record, validRanges *TopicOffsetRanges) {
 	}
 }
 
-func randomRead(nPartitions int32) {
-
+func randomRead(tag string, nPartitions int32) {
 	// Basic client to read offsets
 	client := newClient(make([]kgo.Opt, 0))
 	endOffsets := getOffsets(client, nPartitions, -1)
@@ -274,20 +272,21 @@ func randomRead(nPartitions int32) {
 
 	validRanges := LoadTopicOffsetRanges(nPartitions)
 
+	ctxLog := log.WithFields(log.Fields{"tag": tag})
+
 	// Select a partition and location
-	log.Infof("Reading %d random offsets", *cCount)
+	ctxLog.Infof("Reading %d random offsets", *cCount)
 	for i := 0; i < *cCount; i++ {
 		p := rand.Int31n(nPartitions)
 		pStart := startOffsets[p]
 		pEnd := endOffsets[p]
 
-		if pStart == pEnd {
-			log.Warnf("Partition %d is empty, skipping read", p)
+		if pEnd-pStart < 2 {
+			ctxLog.Warnf("Partition %d is empty, skipping read", p)
 			continue
 		}
-		o := rand.Int63n(pEnd-pStart) + pStart
+		o := rand.Int63n(pEnd-pStart-1) + pStart
 		offset := kgo.NewOffset().At(o)
-		log.Debugf("Read partition %d (%d-%d) at offset %d", p, pStart, pEnd, offset)
 
 		// Construct a map of topic->partition->offset to seek our new client to the right place
 		offsets := make(map[string]map[int32]kgo.Offset)
@@ -303,28 +302,29 @@ func randomRead(nPartitions int32) {
 		client = newClient(opts)
 
 		// Read one record
-		fetches := client.PollRecords(context.Background(), 1)
+		ctxLog.Debugf("Reading partition %d (%d-%d) at offset %d", p, pStart, pEnd, offset)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+		defer cancel()
+		fetches := client.PollRecords(ctx, 1)
+		ctxLog.Debugf("Read done for partition %d (%d-%d) at offset %d", p, pStart, pEnd, offset)
+		fetches.EachError(func(topic string, partition int32, e error) {
+			// In random read mode, we tolerate read errors: if the server is unavailable
+			// we will just proceed to read the next random offset.
+			ctxLog.Errorf("Error reading from partition %s:%d: %v", topic, partition, e)
+		})
 		fetches.EachRecord(func(r *kgo.Record) {
 			if r.Partition != p {
 				Die("Wrong partition %d in read at offset %d on partition %s/%d", r.Partition, r.Offset, *topic, p)
 			}
 			validateRecord(r, &validRanges)
 		})
+		if len(fetches.Records()) == 0 {
+			ctxLog.Errorf("Empty response reading from partition %d at %d", p, offset)
+		}
 		fetches = nil
 
 		client.Flush(context.Background())
 		client.Close()
-		runtime.GC()
-
-		var m runtime.MemStats
-		runtime.ReadMemStats(&m)
-		log.Debugf("After close bytes: %d goroutines: %d", m.Alloc, runtime.NumGoroutine())
-		if false {
-			prof_file, err := os.OpenFile("out.bin", os.O_CREATE|os.O_RDWR, 0755)
-			Chk(err, "opening heap file %v", err)
-			pprof.WriteHeapProfile(prof_file)
-		}
-
 	}
 
 }
@@ -591,7 +591,7 @@ func main() {
 		}
 
 		if *cCount > 0 {
-			randomRead(nPartitions)
+			randomRead("", nPartitions)
 		}
 	} else {
 		var wg sync.WaitGroup
@@ -611,10 +611,10 @@ func main() {
 		if *cCount > 0 {
 			for i := 0; i < parallelRandoms; i++ {
 				wg.Add(1)
-				go func() {
-					randomRead(nPartitions)
+				go func(tag string) {
+					randomRead(tag, nPartitions)
 					wg.Done()
-				}()
+				}(fmt.Sprintf("%03d", i))
 			}
 		}
 
