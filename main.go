@@ -417,10 +417,54 @@ func getOffsetsInner(client *kgo.Client, nPartitions int32, t int64) ([]int64, e
 	return pOffsets, r_err
 }
 
+type ProducerStatus struct {
+	// How many messages did we try to transmit?
+	Sent int64
+
+	// How many messages did we send successfully (were acked
+	// by the server at the offset we expected)?
+	Acked int64
+
+	// How many messages landed at an unexpected offset?
+	// (indicates retries/resends)
+	BadOffsets int64
+
+	// How many times did we restart the producer loop?
+	Restarts int64
+
+	lock sync.Mutex
+}
+
+func (self *ProducerStatus) OnAcked() {
+	self.lock.Lock()
+	defer self.lock.Unlock()
+	self.Acked += 1
+}
+
+func (self *ProducerStatus) OnBadOffset() {
+	self.lock.Lock()
+	defer self.lock.Unlock()
+	self.BadOffsets += 1
+}
+
+func produceCheckpoint(status *ProducerStatus, validOffsets *TopicOffsetRanges) {
+	err := validOffsets.Store()
+	Chk(err, "Error writing offset map: %v", err)
+
+	data, err := json.Marshal(status)
+	Chk(err, "Status serialization error")
+	os.Stdout.Write(data)
+	os.Stdout.Write([]byte("\n"))
+}
+
 func produce(nPartitions int32) {
 	n := int64(*pCount)
+
+	var status ProducerStatus
+	validOffsets := LoadTopicOffsetRanges(nPartitions)
+
 	for {
-		n_produced, bad_offsets := produceInner(n, nPartitions)
+		n_produced, bad_offsets := produceInner(n, nPartitions, &validOffsets, &status)
 		n = n - n_produced
 
 		if len(bad_offsets) > 0 {
@@ -429,6 +473,9 @@ func produce(nPartitions int32) {
 
 		if n <= 0 {
 			return
+		} else {
+			// Record that we took another run at produceInner
+			status.Restarts += 1
 		}
 	}
 }
@@ -438,7 +485,7 @@ type BadOffset struct {
 	O int64
 }
 
-func produceInner(n int64, nPartitions int32) (int64, []BadOffset) {
+func produceInner(n int64, nPartitions int32, validOffsets *TopicValidOffsetRanges, status *ProducerStatus) (int64, []BadOffset) {
 	opts := []kgo.Opt{
 		kgo.DefaultProduceTopic(*topic),
 		kgo.MaxBufferedRecords(1024),
@@ -448,8 +495,6 @@ func produceInner(n int64, nPartitions int32) (int64, []BadOffset) {
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
 	}
 	client := newClient(opts)
-
-	validOffsets := LoadTopicOffsetRanges(nPartitions)
 
 	nextOffset := getOffsets(client, nPartitions, -1)
 
@@ -473,6 +518,7 @@ func produceInner(n int64, nPartitions int32) (int64, []BadOffset) {
 	for i := int64(0); i < n && len(bad_offsets) == 0; i = i + 1 {
 		concurrent.Acquire(context.Background(), 1)
 		produced += 1
+		status.Sent += 1
 		var p = rand.Int31n(nPartitions)
 
 		expect_offset := nextOffset[p]
@@ -488,10 +534,12 @@ func produceInner(n int64, nPartitions int32) (int64, []BadOffset) {
 			Chk(err, "Produce failed!")
 			if expect_offset != r.Offset {
 				log.Warnf("Produced at unexpected offset %d (expected %d) on partition %d", r.Offset, expect_offset, r.Partition)
+				status.OnBadOffset()
 				bad_offsets <- BadOffset{r.Partition, r.Offset}
 				errored = true
 				log.Debugf("errored = %b", errored)
 			} else {
+				status.OnAcked()
 				validOffsets.Insert(r.Partition, r.Offset)
 				log.Debugf("Wrote partition %d at %d", r.Partition, r.Offset)
 			}
@@ -502,8 +550,7 @@ func produceInner(n int64, nPartitions int32) (int64, []BadOffset) {
 		// Not strictly necessary, but useful if a long running producer gets killed
 		// before finishing
 		if i%int64(storeEveryN) == 0 && i != 0 {
-			err := validOffsets.Store()
-			Chk(err, "Error writing interim results: %v", err)
+			produceCheckpoint(status, &validOffsets)
 		}
 	}
 
@@ -513,8 +560,7 @@ func produceInner(n int64, nPartitions int32) (int64, []BadOffset) {
 	wg.Wait()
 	close(bad_offsets)
 
-	err := validOffsets.Store()
-	Chk(err, "Error writing interim results: %v", err)
+	produceCheckpoint(status, &validOffsets)
 
 	if errored {
 		log.Warnf("%d bad offsets", len(bad_offsets))
