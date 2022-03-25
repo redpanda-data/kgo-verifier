@@ -1,4 +1,4 @@
-module github.com/jcsp/si-verifier
+module github.com/redpanda-data/kgo-verifier
 
 go 1.17
 
