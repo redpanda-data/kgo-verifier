@@ -174,19 +174,39 @@ func sequentialRead(nPartitions int32) {
 	hwm := getOffsets(client, nPartitions, -1)
 	lwm := make([]int64, nPartitions)
 
+	var status ConsumerStatus
 	for {
 		var err error
-		lwm, err = sequentialReadInner(nPartitions, lwm, hwm)
+		lwm, err = sequentialReadInner(nPartitions, lwm, hwm, &status)
 		if err != nil {
 			log.Warnf("Restarting reader for error %v", err)
 			// Loop around
 		} else {
+			status.Checkpoint()
 			return
 		}
 	}
 }
 
-func sequentialReadInner(nPartitions int32, startAt []int64, upTo []int64) ([]int64, error) {
+type ConsumerStatus struct {
+	// How many messages did we try to transmit?
+	ValidReads int64
+
+	// How many validation errors (indicating bugs!)
+	InvalidReads int64
+
+	// How many validation errors on extents that are not
+	// designated as valid by the producer (indicates
+	// offsets where retries happened or where unrelated
+	// data was written to the topic)
+	OutOfScopeInvalidReads int64
+
+	// Concurrent access happens when doing random reads
+	// with multiple reader fibers
+	lock sync.Mutex
+}
+
+func sequentialReadInner(nPartitions int32, startAt []int64, upTo []int64, status *ConsumerStatus) ([]int64, error) {
 	log.Infof("Sequential read...")
 
 	offsets := make(map[string]map[int32]kgo.Offset)
@@ -233,7 +253,7 @@ func sequentialReadInner(nPartitions int32, startAt []int64, upTo []int64) ([]in
 				complete[r.Partition] = true
 			}
 
-			validateRecord(r, &validRanges)
+			status.ValidateRecord(r, &validRanges)
 		})
 
 		any_incomplete := false
@@ -252,24 +272,41 @@ func sequentialReadInner(nPartitions int32, startAt []int64, upTo []int64) ([]in
 	return last_read, nil
 }
 
-func validateRecord(r *kgo.Record, validRanges *TopicOffsetRanges) {
+func (cs *ConsumerStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffsetRanges) {
 	expect_key := fmt.Sprintf("%06d.%018d", 0, r.Offset)
 	log.Debugf("Consumed %s on p=%d at o=%d", r.Key, r.Partition, r.Offset)
+	cs.lock.Lock()
+	defer cs.lock.Unlock()
+
 	if expect_key != string(r.Key) {
 		shouldBeValid := validRanges.Contains(r.Partition, r.Offset)
 
 		if shouldBeValid {
+			cs.InvalidReads += 1
 			Die("Bad read at offset %d on partition %s/%d.  Expect '%s', found '%s'", r.Offset, *topic, r.Partition, expect_key, r.Key)
 		} else {
+			cs.OutOfScopeInvalidReads += 1
 			log.Infof("Ignoring read validation at offset outside valid range %s/%d %d", *topic, r.Partition, r.Offset)
 		}
 	} else {
+		cs.ValidReads += 1
 		log.Debugf("Read OK (%s) on p=%d at o=%d", r.Key, r.Partition, r.Offset)
+	}
 
+	total := cs.InvalidReads + cs.OutOfScopeInvalidReads + cs.ValidReads
+	if total%10000 == 0 {
+		cs.Checkpoint()
 	}
 }
 
-func randomRead(tag string, nPartitions int32) {
+func (cs *ConsumerStatus) Checkpoint() {
+	data, err := json.Marshal(cs)
+	Chk(err, "Status serialization error")
+	os.Stdout.Write(data)
+	os.Stdout.Write([]byte("\n"))
+}
+
+func randomRead(tag string, nPartitions int32, status *ConsumerStatus) {
 	// Basic client to read offsets
 	client := newClient(make([]kgo.Opt, 0))
 	endOffsets := getOffsets(client, nPartitions, -1)
@@ -325,7 +362,7 @@ func randomRead(tag string, nPartitions int32) {
 			if r.Partition != p {
 				Die("Wrong partition %d in read at offset %d on partition %s/%d", r.Partition, r.Offset, *topic, p)
 			}
-			validateRecord(r, &validRanges)
+			status.ValidateRecord(r, &validRanges)
 		})
 		if len(fetches.Records()) == 0 {
 			ctxLog.Errorf("Empty response reading from partition %d at %d", p, offset)
@@ -485,7 +522,7 @@ type BadOffset struct {
 	O int64
 }
 
-func produceInner(n int64, nPartitions int32, validOffsets *TopicValidOffsetRanges, status *ProducerStatus) (int64, []BadOffset) {
+func produceInner(n int64, nPartitions int32, validOffsets *TopicOffsetRanges, status *ProducerStatus) (int64, []BadOffset) {
 	opts := []kgo.Opt{
 		kgo.DefaultProduceTopic(*topic),
 		kgo.MaxBufferedRecords(1024),
@@ -550,7 +587,7 @@ func produceInner(n int64, nPartitions int32, validOffsets *TopicValidOffsetRang
 		// Not strictly necessary, but useful if a long running producer gets killed
 		// before finishing
 		if i%int64(storeEveryN) == 0 && i != 0 {
-			produceCheckpoint(status, &validOffsets)
+			produceCheckpoint(status, validOffsets)
 		}
 	}
 
@@ -560,7 +597,7 @@ func produceInner(n int64, nPartitions int32, validOffsets *TopicValidOffsetRang
 	wg.Wait()
 	close(bad_offsets)
 
-	produceCheckpoint(status, &validOffsets)
+	produceCheckpoint(status, validOffsets)
 
 	if errored {
 		log.Warnf("%d bad offsets", len(bad_offsets))
@@ -646,7 +683,10 @@ func main() {
 		}
 
 		if *cCount > 0 {
-			randomRead("", nPartitions)
+			var status ConsumerStatus
+			randomRead("", nPartitions, &status)
+			status.Checkpoint()
+
 		}
 	} else {
 		var wg sync.WaitGroup
@@ -663,18 +703,18 @@ func main() {
 			parallelRandoms -= 1
 		}
 
+		var status ConsumerStatus
 		if *cCount > 0 {
 			for i := 0; i < parallelRandoms; i++ {
 				wg.Add(1)
 				go func(tag string) {
-					randomRead(tag, nPartitions)
+					randomRead(tag, nPartitions, &status)
 					wg.Done()
 				}(fmt.Sprintf("%03d", i))
 			}
 		}
 
 		wg.Wait()
-
+		status.Checkpoint()
 	}
-
 }
