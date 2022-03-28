@@ -1,0 +1,15 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    target-branch: "main"
+    commit-message:
+      prefix: "cargo"
+    pull-request-branch-name:
+      separator: "-"
+    reviewers:
+      - "jcsp"
