@@ -123,7 +123,18 @@ func (tors *TopicOffsetRanges) Store() error {
 	if err != nil {
 		return err
 	}
-	err = ioutil.WriteFile(topicOffsetRangeFile(), data, 0644)
+
+	tmp_file, err := ioutil.TempFile("./", "valid_offsets_*.tmp")
+	if err != nil {
+		return err
+	}
+
+	_, err = tmp_file.Write(data)
+	if err != nil {
+		return err
+	}
+
+	err = os.Rename(tmp_file.Name(), topicOffsetRangeFile())
 	if err != nil {
 		return err
 	}
@@ -174,7 +185,7 @@ func sequentialRead(nPartitions int32) {
 	hwm := getOffsets(client, nPartitions, -1)
 	lwm := make([]int64, nPartitions)
 
-	var status ConsumerStatus
+	status := NewConsumerStatus()
 	for {
 		var err error
 		lwm, err = sequentialReadInner(nPartitions, lwm, hwm, &status)
@@ -207,6 +218,12 @@ type ConsumerStatus struct {
 
 	// For emitting checkpoints on time intervals
 	lastCheckpoint time.Time
+}
+
+func NewConsumerStatus() ConsumerStatus {
+	return ConsumerStatus{
+		lastCheckpoint: time.Now(),
+	}
 }
 
 func sequentialReadInner(nPartitions int32, startAt []int64, upTo []int64, status *ConsumerStatus) ([]int64, error) {
@@ -486,6 +503,12 @@ type ProducerStatus struct {
 	lastCheckpoint time.Time
 }
 
+func NewProducerStatus() ProducerStatus {
+	return ProducerStatus{
+		lastCheckpoint: time.Now(),
+	}
+}
+
 func (self *ProducerStatus) OnAcked() {
 	self.lock.Lock()
 	defer self.lock.Unlock()
@@ -511,7 +534,7 @@ func produceCheckpoint(status *ProducerStatus, validOffsets *TopicOffsetRanges) 
 func produce(nPartitions int32) {
 	n := int64(*pCount)
 
-	var status ProducerStatus
+	status := NewProducerStatus()
 	validOffsets := LoadTopicOffsetRanges(nPartitions)
 
 	for {
@@ -697,7 +720,7 @@ func main() {
 		}
 
 		if *cCount > 0 {
-			var status ConsumerStatus
+			status := NewConsumerStatus()
 			randomRead("", nPartitions, &status)
 			status.Checkpoint()
 
@@ -717,7 +740,7 @@ func main() {
 			parallelRandoms -= 1
 		}
 
-		var status ConsumerStatus
+		status := NewConsumerStatus()
 		if *cCount > 0 {
 			for i := 0; i < parallelRandoms; i++ {
 				wg.Add(1)
