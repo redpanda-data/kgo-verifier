@@ -320,9 +320,13 @@ func randomRead(tag string, nPartitions int32, status *ConsumerStatus) {
 
 	ctxLog := log.WithFields(log.Fields{"tag": tag})
 
+	readCount := *cCount
+
 	// Select a partition and location
 	ctxLog.Infof("Reading %d random offsets", *cCount)
-	for i := 0; i < *cCount; i++ {
+
+	i := 0
+	for i < readCount {
 		p := rand.Int31n(nPartitions)
 		pStart := startOffsets[p]
 		pEnd := endOffsets[p]
@@ -366,6 +370,10 @@ func randomRead(tag string, nPartitions int32, status *ConsumerStatus) {
 		})
 		if len(fetches.Records()) == 0 {
 			ctxLog.Errorf("Empty response reading from partition %d at %d", p, offset)
+		} else {
+			// Each read on which we get some records counts toward
+			// the number of reads we were requested to do.
+			i += 1
 		}
 		fetches = nil
 
