@@ -204,6 +204,9 @@ type ConsumerStatus struct {
 	// Concurrent access happens when doing random reads
 	// with multiple reader fibers
 	lock sync.Mutex
+
+	// For emitting checkpoints on time intervals
+	lastCheckpoint time.Time
 }
 
 func sequentialReadInner(nPartitions int32, startAt []int64, upTo []int64, status *ConsumerStatus) ([]int64, error) {
@@ -293,9 +296,9 @@ func (cs *ConsumerStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffset
 		log.Debugf("Read OK (%s) on p=%d at o=%d", r.Key, r.Partition, r.Offset)
 	}
 
-	total := cs.InvalidReads + cs.OutOfScopeInvalidReads + cs.ValidReads
-	if total%10000 == 0 {
+	if time.Since(cs.lastCheckpoint) > time.Second*5 {
 		cs.Checkpoint()
+		cs.lastCheckpoint = time.Now()
 	}
 }
 
@@ -478,6 +481,9 @@ type ProducerStatus struct {
 	Restarts int64
 
 	lock sync.Mutex
+
+	// For emitting checkpoints on time intervals
+	lastCheckpoint time.Time
 }
 
 func (self *ProducerStatus) OnAcked() {
@@ -558,8 +564,6 @@ func produceInner(n int64, nPartitions int32, validOffsets *TopicOffsetRanges, s
 
 	log.Infof("Producing %d messages (%d bytes)", n, *mSize)
 
-	storeEveryN := 10000
-
 	for i := int64(0); i < n && len(bad_offsets) == 0; i = i + 1 {
 		concurrent.Acquire(context.Background(), 1)
 		produced += 1
@@ -594,7 +598,9 @@ func produceInner(n int64, nPartitions int32, validOffsets *TopicOffsetRanges, s
 
 		// Not strictly necessary, but useful if a long running producer gets killed
 		// before finishing
-		if i%int64(storeEveryN) == 0 && i != 0 {
+
+		if time.Since(status.lastCheckpoint) > 5*time.Second {
+			status.lastCheckpoint = time.Now()
 			produceCheckpoint(status, validOffsets)
 		}
 	}
