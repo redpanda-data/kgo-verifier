@@ -46,17 +46,19 @@ func Chk(err error, msg string, args ...interface{}) {
 }
 
 var (
-	debug        = flag.Bool("debug", false, "Enable verbose logging")
-	trace        = flag.Bool("trace", false, "Enable super-verbose (franz-go internals)")
-	brokers      = flag.String("brokers", "localhost:9092", "comma delimited list of brokers")
-	topic        = flag.String("topic", "", "topic to produce to or consume from")
-	username     = flag.String("username", "", "SASL username")
-	password     = flag.String("password", "", "SASL password")
-	mSize        = flag.Int("msg_size", 16384, "Size of messages to produce")
-	pCount       = flag.Int("produce_msgs", 1000, "Number of messages to produce")
-	cCount       = flag.Int("rand_read_msgs", 10, "Number of validation reads to do")
-	seqRead      = flag.Bool("seq_read", true, "Whether to do sequential read validation")
-	parallelRead = flag.Int("parallel", 1, "How many readers to run in parallel")
+	debug         = flag.Bool("debug", false, "Enable verbose logging")
+	trace         = flag.Bool("trace", false, "Enable super-verbose (franz-go internals)")
+	brokers       = flag.String("brokers", "localhost:9092", "comma delimited list of brokers")
+	topic         = flag.String("topic", "", "topic to produce to or consume from")
+	username      = flag.String("username", "", "SASL username")
+	password      = flag.String("password", "", "SASL password")
+	mSize         = flag.Int("msg_size", 16384, "Size of messages to produce")
+	pCount        = flag.Int("produce_msgs", 1000, "Number of messages to produce")
+	cCount        = flag.Int("rand_read_msgs", 10, "Number of validation reads to do")
+	seqRead       = flag.Bool("seq_read", true, "Whether to do sequential read validation")
+	parallelRead  = flag.Int("parallel", 1, "How many readers to run in parallel")
+	batchMaxBytes = flag.Int("batch_max_bytes", 1048576, "the maximum batch size to allow per-partition (must be less than Kafka's max.message.bytes, producing)")
+
 )
 
 type OffsetRange struct {
@@ -563,7 +565,7 @@ func produceInner(n int64, nPartitions int32, validOffsets *TopicOffsetRanges, s
 	opts := []kgo.Opt{
 		kgo.DefaultProduceTopic(*topic),
 		kgo.MaxBufferedRecords(1024),
-		kgo.ProducerBatchMaxBytes(1024 * 1024),
+		kgo.ProducerBatchMaxBytes(int32(*batchMaxBytes)),
 		kgo.ProducerBatchCompression(kgo.NoCompression()),
 		kgo.RequiredAcks(kgo.AllISRAcks()),
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
