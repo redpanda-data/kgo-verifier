@@ -228,6 +228,40 @@ func NewConsumerStatus() ConsumerStatus {
 	}
 }
 
+func (cs *ConsumerStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffsetRanges) {
+	expect_key := fmt.Sprintf("%06d.%018d", 0, r.Offset)
+	log.Debugf("Consumed %s on p=%d at o=%d", r.Key, r.Partition, r.Offset)
+	cs.lock.Lock()
+	defer cs.lock.Unlock()
+
+	if expect_key != string(r.Key) {
+		shouldBeValid := validRanges.Contains(r.Partition, r.Offset)
+
+		if shouldBeValid {
+			cs.InvalidReads += 1
+			Die("Bad read at offset %d on partition %s/%d.  Expect '%s', found '%s'", r.Offset, *topic, r.Partition, expect_key, r.Key)
+		} else {
+			cs.OutOfScopeInvalidReads += 1
+			log.Infof("Ignoring read validation at offset outside valid range %s/%d %d", *topic, r.Partition, r.Offset)
+		}
+	} else {
+		cs.ValidReads += 1
+		log.Debugf("Read OK (%s) on p=%d at o=%d", r.Key, r.Partition, r.Offset)
+	}
+
+	if time.Since(cs.lastCheckpoint) > time.Second*5 {
+		cs.Checkpoint()
+		cs.lastCheckpoint = time.Now()
+	}
+}
+
+func (cs *ConsumerStatus) Checkpoint() {
+	data, err := json.Marshal(cs)
+	Chk(err, "Status serialization error")
+	os.Stdout.Write(data)
+	os.Stdout.Write([]byte("\n"))
+}
+
 func sequentialReadInner(nPartitions int32, startAt []int64, upTo []int64, status *ConsumerStatus) ([]int64, error) {
 	log.Infof("Sequential read...")
 
@@ -292,40 +326,6 @@ func sequentialReadInner(nPartitions int32, startAt []int64, upTo []int64, statu
 	}
 
 	return last_read, nil
-}
-
-func (cs *ConsumerStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffsetRanges) {
-	expect_key := fmt.Sprintf("%06d.%018d", 0, r.Offset)
-	log.Debugf("Consumed %s on p=%d at o=%d", r.Key, r.Partition, r.Offset)
-	cs.lock.Lock()
-	defer cs.lock.Unlock()
-
-	if expect_key != string(r.Key) {
-		shouldBeValid := validRanges.Contains(r.Partition, r.Offset)
-
-		if shouldBeValid {
-			cs.InvalidReads += 1
-			Die("Bad read at offset %d on partition %s/%d.  Expect '%s', found '%s'", r.Offset, *topic, r.Partition, expect_key, r.Key)
-		} else {
-			cs.OutOfScopeInvalidReads += 1
-			log.Infof("Ignoring read validation at offset outside valid range %s/%d %d", *topic, r.Partition, r.Offset)
-		}
-	} else {
-		cs.ValidReads += 1
-		log.Debugf("Read OK (%s) on p=%d at o=%d", r.Key, r.Partition, r.Offset)
-	}
-
-	if time.Since(cs.lastCheckpoint) > time.Second*5 {
-		cs.Checkpoint()
-		cs.lastCheckpoint = time.Now()
-	}
-}
-
-func (cs *ConsumerStatus) Checkpoint() {
-	data, err := json.Marshal(cs)
-	Chk(err, "Status serialization error")
-	os.Stdout.Write(data)
-	os.Stdout.Write([]byte("\n"))
 }
 
 func randomRead(tag string, nPartitions int32, status *ConsumerStatus) {
