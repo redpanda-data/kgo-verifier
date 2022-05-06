@@ -58,7 +58,7 @@ var (
 	seqRead       = flag.Bool("seq_read", true, "Whether to do sequential read validation")
 	parallelRead  = flag.Int("parallel", 1, "How many readers to run in parallel")
 	batchMaxBytes = flag.Int("batch_max_bytes", 1048576, "the maximum batch size to allow per-partition (must be less than Kafka's max.message.bytes, producing)")
-
+	cgReaders     = flag.Int("consumer_group_readers", 0, "Number of parallel readers in the consumer group")
 )
 
 type OffsetRange struct {
@@ -228,6 +228,40 @@ func NewConsumerStatus() ConsumerStatus {
 	}
 }
 
+func (cs *ConsumerStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffsetRanges) {
+	expect_key := fmt.Sprintf("%06d.%018d", 0, r.Offset)
+	log.Debugf("Consumed %s on p=%d at o=%d", r.Key, r.Partition, r.Offset)
+	cs.lock.Lock()
+	defer cs.lock.Unlock()
+
+	if expect_key != string(r.Key) {
+		shouldBeValid := validRanges.Contains(r.Partition, r.Offset)
+
+		if shouldBeValid {
+			cs.InvalidReads += 1
+			Die("Bad read at offset %d on partition %s/%d.  Expect '%s', found '%s'", r.Offset, *topic, r.Partition, expect_key, r.Key)
+		} else {
+			cs.OutOfScopeInvalidReads += 1
+			log.Infof("Ignoring read validation at offset outside valid range %s/%d %d", *topic, r.Partition, r.Offset)
+		}
+	} else {
+		cs.ValidReads += 1
+		log.Debugf("Read OK (%s) on p=%d at o=%d", r.Key, r.Partition, r.Offset)
+	}
+
+	if time.Since(cs.lastCheckpoint) > time.Second*5 {
+		cs.Checkpoint()
+		cs.lastCheckpoint = time.Now()
+	}
+}
+
+func (cs *ConsumerStatus) Checkpoint() {
+	data, err := json.Marshal(cs)
+	Chk(err, "Status serialization error")
+	os.Stdout.Write(data)
+	os.Stdout.Write([]byte("\n"))
+}
+
 func sequentialReadInner(nPartitions int32, startAt []int64, upTo []int64, status *ConsumerStatus) ([]int64, error) {
 	log.Infof("Sequential read...")
 
@@ -292,40 +326,6 @@ func sequentialReadInner(nPartitions int32, startAt []int64, upTo []int64, statu
 	}
 
 	return last_read, nil
-}
-
-func (cs *ConsumerStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffsetRanges) {
-	expect_key := fmt.Sprintf("%06d.%018d", 0, r.Offset)
-	log.Debugf("Consumed %s on p=%d at o=%d", r.Key, r.Partition, r.Offset)
-	cs.lock.Lock()
-	defer cs.lock.Unlock()
-
-	if expect_key != string(r.Key) {
-		shouldBeValid := validRanges.Contains(r.Partition, r.Offset)
-
-		if shouldBeValid {
-			cs.InvalidReads += 1
-			Die("Bad read at offset %d on partition %s/%d.  Expect '%s', found '%s'", r.Offset, *topic, r.Partition, expect_key, r.Key)
-		} else {
-			cs.OutOfScopeInvalidReads += 1
-			log.Infof("Ignoring read validation at offset outside valid range %s/%d %d", *topic, r.Partition, r.Offset)
-		}
-	} else {
-		cs.ValidReads += 1
-		log.Debugf("Read OK (%s) on p=%d at o=%d", r.Key, r.Partition, r.Offset)
-	}
-
-	if time.Since(cs.lastCheckpoint) > time.Second*5 {
-		cs.Checkpoint()
-		cs.lastCheckpoint = time.Now()
-	}
-}
-
-func (cs *ConsumerStatus) Checkpoint() {
-	data, err := json.Marshal(cs)
-	Chk(err, "Status serialization error")
-	os.Stdout.Write(data)
-	os.Stdout.Write([]byte("\n"))
 }
 
 func randomRead(tag string, nPartitions int32, status *ConsumerStatus) {
@@ -402,7 +402,150 @@ func randomRead(tag string, nPartitions int32, status *ConsumerStatus) {
 		client.Flush(context.Background())
 		client.Close()
 	}
+}
 
+type ConsumerGroupOffsets struct {
+	// This is called by one of the readers to signal that we have read all
+	// offsets that we intended to.
+	cancelFunc context.CancelFunc
+
+	lock sync.Mutex
+	// Partition id -> offset last seen by readers
+	lastSeen []int64
+	// Partition id -> max offset that we intend to read (exclusive)
+	upTo []int64
+}
+
+func NewConsumerGroupOffsets(hwms []int64, cancelFunc context.CancelFunc) ConsumerGroupOffsets {
+	lastSeen := make([]int64, len(hwms))
+	upTo := make([]int64, len(hwms))
+	copy(upTo, hwms)
+	return ConsumerGroupOffsets{
+		cancelFunc: cancelFunc,
+		lastSeen:   lastSeen,
+		upTo:       upTo,
+	}
+}
+
+func (cgs *ConsumerGroupOffsets) AddRecord(r *kgo.Record) {
+	cgs.lock.Lock()
+	defer cgs.lock.Unlock()
+
+	if r.Offset > cgs.lastSeen[r.Partition] {
+		cgs.lastSeen[r.Partition] = r.Offset
+	}
+
+	if cgs.lastSeen[r.Partition] >= cgs.upTo[r.Partition]-1 {
+		allComplete := true
+		for p, hwm := range cgs.upTo {
+			if cgs.lastSeen[p] < hwm-1 {
+				allComplete = false
+				break
+			}
+		}
+		if allComplete {
+			cgs.cancelFunc()
+		}
+	}
+}
+
+func consumerGroupRead(nPartitions int32, nReaders int) {
+	client := newClient(nil)
+	startOffsets := getOffsets(client, nPartitions, -2)
+	hwms := getOffsets(client, nPartitions, -1)
+	client.Close()
+
+	hasMessages := false
+	for p := 0; p < int(nPartitions); p++ {
+		if startOffsets[p] < hwms[p] {
+			hasMessages = true
+			break
+		}
+	}
+
+	if !hasMessages {
+		log.Infof("Topic is empty, exiting...")
+		return
+	}
+
+	groupName := fmt.Sprintf("kgo-verifier-%d-%d", time.Now().Unix(), os.Getpid())
+	log.Infof("Reading with consumer group %s", groupName)
+
+	status := NewConsumerStatus()
+	ctx, cancelFunc := context.WithCancel(context.Background())
+	cgOffsets := NewConsumerGroupOffsets(hwms, cancelFunc)
+
+	var wg sync.WaitGroup
+	for i := 0; i < nReaders; i++ {
+		wg.Add(1)
+		go func(fiberId int) {
+			for {
+				err := consumerGroupReadInner(
+					ctx, fiberId, nPartitions, groupName, &status, &cgOffsets)
+				if err != nil {
+					log.Warnf(
+						"fiber %v: restarting consumer group reader for error %v",
+						fiberId, err)
+					// Loop around and retry
+				} else {
+					log.Infof("fiber %v: consumer group reader finished", fiberId)
+					break
+				}
+			}
+			wg.Done()
+		}(i)
+	}
+
+	wg.Wait()
+	status.Checkpoint()
+}
+
+func consumerGroupReadInner(
+	ctx context.Context,
+	fiberId int, nPartitions int32, groupName string,
+	status *ConsumerStatus, cgOffsets *ConsumerGroupOffsets) error {
+	opts := []kgo.Opt{
+		kgo.ConsumeTopics(*topic),
+		kgo.ConsumerGroup(groupName),
+	}
+	client := newClient(opts)
+	defer client.Close()
+
+	validRanges := LoadTopicOffsetRanges(nPartitions)
+
+	for {
+		fetches := client.PollFetches(ctx)
+		if ctx.Err() == context.Canceled {
+			break
+		} else if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		var r_err error
+		fetches.EachError(func(t string, p int32, err error) {
+			log.Warnf(
+				"fiber %v: Consumer group fetch %s/%d e=%v...",
+				fiberId, t, p, err)
+			r_err = err
+		})
+
+		if r_err != nil {
+			return r_err
+		}
+
+		fetches.EachRecord(func(r *kgo.Record) {
+			log.Debugf(
+				"fiber %v: Consumer group read %s/%d o=%d...",
+				fiberId, *topic, r.Partition, r.Offset)
+			status.ValidateRecord(r, &validRanges)
+			// Will cancel the context if we have read everything
+			cgOffsets.AddRecord(r)
+		})
+
+		// Offsets will be committed on the next PollFetches invocation
+	}
+
+	return nil
 }
 
 func newRecord(producerId int, sequence int64) *kgo.Record {
@@ -725,7 +868,6 @@ func main() {
 			status := NewConsumerStatus()
 			randomRead("", nPartitions, &status)
 			status.Checkpoint()
-
 		}
 	} else {
 		var wg sync.WaitGroup
@@ -755,5 +897,9 @@ func main() {
 
 		wg.Wait()
 		status.Checkpoint()
+	}
+
+	if *cgReaders > 0 {
+		consumerGroupRead(nPartitions, *cgReaders)
 	}
 }
