@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/redpanda-data/kgo-verifier/pkg/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -32,18 +33,6 @@ import (
 	"github.com/vectorizedio/redpanda/src/go/rpk/pkg/kafka"
 	"golang.org/x/sync/semaphore"
 )
-
-func Die(msg string, args ...interface{}) {
-	formatted := fmt.Sprintf(msg, args...)
-	log.Error(formatted)
-	os.Exit(1)
-}
-
-func Chk(err error, msg string, args ...interface{}) {
-	if err != nil {
-		Die(msg, args...)
-	}
-}
 
 var (
 	debug         = flag.Bool("debug", false, "Enable verbose logging")
@@ -86,7 +75,7 @@ func (ors *OffsetRanges) Insert(o int64) {
 		if o < last.Upper {
 			// TODO: more flexible structure for out of order inserts, at the moment
 			// we rely on franz-go callbacks being invoked in order.
-			Die("Out of order offset %d", o)
+			util.Die("Out of order offset %d", o)
 		} else {
 			ors.Ranges = append(ors.Ranges, OffsetRange{Lower: o, Upper: o + 1})
 		}
@@ -167,11 +156,11 @@ func LoadTopicOffsetRanges(nPartitions int32) TopicOffsetRanges {
 		var tors TopicOffsetRanges
 		if len(data) > 0 {
 			err = json.Unmarshal(data, &tors)
-			Chk(err, "Bad JSON %v", err)
+			util.Chk(err, "Bad JSON %v", err)
 		}
 
 		if int32(len(tors.PartitionRanges)) > nPartitions {
-			Die("More partitions in valid_offsets file than in topic!")
+			util.Die("More partitions in valid_offsets file than in topic!")
 		} else if len(tors.PartitionRanges) < int(nPartitions) {
 			// Creating new partitions is allowed
 			blanks := make([]OffsetRanges, nPartitions-int32(len(tors.PartitionRanges)))
@@ -239,7 +228,7 @@ func (cs *ConsumerStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffset
 
 		if shouldBeValid {
 			cs.InvalidReads += 1
-			Die("Bad read at offset %d on partition %s/%d.  Expect '%s', found '%s'", r.Offset, *topic, r.Partition, expect_key, r.Key)
+			util.Die("Bad read at offset %d on partition %s/%d.  Expect '%s', found '%s'", r.Offset, *topic, r.Partition, expect_key, r.Key)
 		} else {
 			cs.OutOfScopeInvalidReads += 1
 			log.Infof("Ignoring read validation at offset outside valid range %s/%d %d", *topic, r.Partition, r.Offset)
@@ -257,7 +246,7 @@ func (cs *ConsumerStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffset
 
 func (cs *ConsumerStatus) Checkpoint() {
 	data, err := json.Marshal(cs)
-	Chk(err, "Status serialization error")
+	util.Chk(err, "Status serialization error")
 	os.Stdout.Write(data)
 	os.Stdout.Write([]byte("\n"))
 }
@@ -386,7 +375,7 @@ func randomRead(tag string, nPartitions int32, status *ConsumerStatus) {
 		})
 		fetches.EachRecord(func(r *kgo.Record) {
 			if r.Partition != p {
-				Die("Wrong partition %d in read at offset %d on partition %s/%d", r.Partition, r.Offset, *topic, p)
+				util.Die("Wrong partition %d in read at offset %d on partition %s/%d", r.Partition, r.Offset, *topic, p)
 			}
 			status.ValidateRecord(r, &validRanges)
 		})
@@ -668,10 +657,10 @@ func (self *ProducerStatus) OnBadOffset() {
 
 func produceCheckpoint(status *ProducerStatus, validOffsets *TopicOffsetRanges) {
 	err := validOffsets.Store()
-	Chk(err, "Error writing offset map: %v", err)
+	util.Chk(err, "Error writing offset map: %v", err)
 
 	data, err := json.Marshal(status)
-	Chk(err, "Status serialization error")
+	util.Chk(err, "Status serialization error")
 	os.Stdout.Write(data)
 	os.Stdout.Write([]byte("\n"))
 }
@@ -748,7 +737,7 @@ func produceInner(n int64, nPartitions int32, validOffsets *TopicOffsetRanges, s
 		log.Debugf("Writing partition %d at %d", r.Partition, nextOffset[p])
 		handler := func(r *kgo.Record, err error) {
 			concurrent.Release(1)
-			Chk(err, "Produce failed: %v", err)
+			util.Chk(err, "Produce failed: %v", err)
 			if expect_offset != r.Offset {
 				log.Warnf("Produced at unexpected offset %d (expected %d) on partition %d", r.Offset, expect_offset, r.Partition)
 				status.OnBadOffset()
@@ -788,7 +777,7 @@ func produceInner(n int64, nPartitions int32, validOffsets *TopicOffsetRanges, s
 			r = append(r, o)
 		}
 		if len(r) == 0 {
-			Die("No bad offsets but errored?")
+			util.Die("No bad offsets but errored?")
 		}
 		successful_produced := produced - int64(len(r))
 		return successful_produced, r
@@ -818,7 +807,7 @@ func newClient(opts []kgo.Opt) *kgo.Client {
 	}
 
 	client, err := kgo.NewClient(opts...)
-	Chk(err, "Error creating kafka client")
+	util.Chk(err, "Error creating kafka client")
 	return client
 }
 
@@ -842,13 +831,13 @@ func main() {
 		req.Topics = append(req.Topics, reqTopic)
 
 		resp, err := req.RequestWith(context.Background(), client)
-		Chk(err, "unable to request topic metadata: %v", err)
+		util.Chk(err, "unable to request topic metadata: %v", err)
 		if len(resp.Topics) != 1 {
-			Die("metadata response returned %d topics when we asked for 1", len(resp.Topics))
+			util.Die("metadata response returned %d topics when we asked for 1", len(resp.Topics))
 		}
 		t = resp.Topics[0]
 		if t.ErrorCode != 0 {
-			Die("Error %s getting topic metadata", kerr.ErrorForCode(t.ErrorCode))
+			util.Die("Error %s getting topic metadata", kerr.ErrorForCode(t.ErrorCode))
 		}
 	}
 
