@@ -748,7 +748,7 @@ func produceInner(n int64, nPartitions int32, validOffsets *TopicOffsetRanges, s
 		log.Debugf("Writing partition %d at %d", r.Partition, nextOffset[p])
 		handler := func(r *kgo.Record, err error) {
 			concurrent.Release(1)
-			Chk(err, "Produce failed!")
+			Chk(err, "Produce failed: %v", err)
 			if expect_offset != r.Offset {
 				log.Warnf("Produced at unexpected offset %d (expected %d) on partition %d", r.Offset, expect_offset, r.Partition)
 				status.OnBadOffset()
