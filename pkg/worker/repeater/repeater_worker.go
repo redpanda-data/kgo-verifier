@@ -277,7 +277,7 @@ func (v *Worker) Init() {
 
 		// Producer properties
 		kgo.DefaultProduceTopic(v.config.Topic),
-		kgo.MaxBufferedRecords(1),
+		kgo.MaxBufferedRecords(int(v.config.MaxBufferedRecords)),
 		kgo.ProducerBatchMaxBytes(1024 * 1024),
 		kgo.ProducerBatchCompression(kgo.NoCompression()),
 		kgo.RecordPartitioner(kgo.StickyKeyPartitioner(nil)),

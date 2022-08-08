@@ -23,18 +23,19 @@ import (
 )
 
 var (
-	debug         = flag.Bool("debug", false, "Enable verbose logging")
-	trace         = flag.Bool("trace", false, "Enable ultra-verbose client logging")
-	brokers       = flag.String("brokers", "localhost:9092", "comma delimited list of brokers")
-	topic         = flag.String("topic", "", "topic to produce to or consume from")
-	linger        = flag.Duration("linger", 0, "if non-zero, linger to use when producing")
-	group         = flag.String("group", "", "consumer group")
-	workers       = flag.Uint("workers", 1, "How many to run in this process")
-	keys          = flag.Uint64("keys", 0, "How many unique keys to use, or 0 for full 64 bit space")
-	payloadSize   = flag.Uint64("payload-size", 16384, "Message payload size in bytes")
-	initialDataMb = flag.Uint64("initial-data-mb", 4, "Initial target data in flight in megabytes")
-	remote        = flag.Bool("remote", false, "Operate in remote-controlled mode")
-	remotePort    = flag.Uint("remote-port", 7884, "Port for report control HTTP listener")
+	debug              = flag.Bool("debug", false, "Enable verbose logging")
+	trace              = flag.Bool("trace", false, "Enable ultra-verbose client logging")
+	brokers            = flag.String("brokers", "localhost:9092", "comma delimited list of brokers")
+	topic              = flag.String("topic", "", "topic to produce to or consume from")
+	linger             = flag.Duration("linger", 0, "if non-zero, linger to use when producing")
+	maxBufferedRecords = flag.Uint("max-buffered-records", 1, "Producer buffer size: the default of 1 is makes roughly one event per batch, useful for measurement.  Set to something higher to make it easier to max out bandwidth.")
+	group              = flag.String("group", "", "consumer group")
+	workers            = flag.Uint("workers", 1, "How many to run in this process")
+	keys               = flag.Uint64("keys", 0, "How many unique keys to use, or 0 for full 64 bit space")
+	payloadSize        = flag.Uint64("payload-size", 16384, "Message payload size in bytes")
+	initialDataMb      = flag.Uint64("initial-data-mb", 4, "Initial target data in flight in megabytes")
+	remote             = flag.Bool("remote", false, "Operate in remote-controlled mode")
+	remotePort         = flag.Uint("remote-port", 7884, "Port for report control HTTP listener")
 )
 
 // NewAdmin returns a franz-go admin client.
@@ -93,7 +94,7 @@ func main() {
 	dataInFlightPerWorker := (*initialDataMb * 1024 * 1024) / uint64(*workers)
 
 	config := worker.NewWorkerConfig(
-		*brokers, *trace, *topic, *linger, *group, partitions, *keys, *payloadSize, dataInFlightPerWorker,
+		*brokers, *trace, *topic, *linger, *maxBufferedRecords, *group, partitions, *keys, *payloadSize, dataInFlightPerWorker,
 	)
 
 	c := make(chan os.Signal, 1)

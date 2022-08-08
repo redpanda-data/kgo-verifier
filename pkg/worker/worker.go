@@ -83,27 +83,29 @@ type ValueGenerator struct {
 }
 
 type WorkerConfig struct {
-	Brokers        string
-	Trace          bool
-	Topic          string
-	Linger         time.Duration
-	Group          string
-	Partitions     []int32
-	KeySpace       KeySpace
-	ValueGenerator ValueGenerator
-	DataInFlight   uint64
+	Brokers            string
+	Trace              bool
+	Topic              string
+	Linger             time.Duration
+	MaxBufferedRecords uint
+	Group              string
+	Partitions         []int32
+	KeySpace           KeySpace
+	ValueGenerator     ValueGenerator
+	DataInFlight       uint64
 }
 
-func NewWorkerConfig(brokers string, trace bool, topic string, linger time.Duration, group string, partitions []int32, keys uint64, payloadSize uint64, dataInFlight uint64) WorkerConfig {
+func NewWorkerConfig(brokers string, trace bool, topic string, linger time.Duration, maxBufferedRecords uint, group string, partitions []int32, keys uint64, payloadSize uint64, dataInFlight uint64) WorkerConfig {
 	return WorkerConfig{
-		Brokers:        brokers,
-		Trace:          trace,
-		Topic:          topic,
-		Linger:         linger,
-		Group:          group,
-		Partitions:     partitions,
-		KeySpace:       KeySpace{UniqueCount: keys},
-		ValueGenerator: ValueGenerator{PayloadSize: payloadSize},
-		DataInFlight:   dataInFlight,
+		Brokers:            brokers,
+		Trace:              trace,
+		Topic:              topic,
+		Linger:             linger,
+		MaxBufferedRecords: maxBufferedRecords,
+		Group:              group,
+		Partitions:         partitions,
+		KeySpace:           KeySpace{UniqueCount: keys},
+		ValueGenerator:     ValueGenerator{PayloadSize: payloadSize},
+		DataInFlight:       dataInFlight,
 	}
 }
