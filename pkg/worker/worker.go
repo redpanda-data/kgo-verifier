@@ -1,11 +1,14 @@
-package verifier
+package worker
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	metrics "github.com/rcrowley/go-metrics"
+	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/sasl/scram"
 )
 
 type MessageStats struct {
@@ -88,24 +91,52 @@ type WorkerConfig struct {
 	Topic              string
 	Linger             time.Duration
 	MaxBufferedRecords uint
-	Group              string
-	Partitions         []int32
-	KeySpace           KeySpace
-	ValueGenerator     ValueGenerator
-	DataInFlight       uint64
+	BatchMaxbytes      uint
+	SaslUser           string
+	SaslPass           string
 }
 
-func NewWorkerConfig(brokers string, trace bool, topic string, linger time.Duration, maxBufferedRecords uint, group string, partitions []int32, keys uint64, payloadSize uint64, dataInFlight uint64) WorkerConfig {
+func (wc *WorkerConfig) MakeKgoOpts() []kgo.Opt {
+	opts := []kgo.Opt{
+		kgo.SeedBrokers(strings.Split(wc.Brokers, ",")...),
+
+		// Consumer properties
+		kgo.ConsumeTopics(wc.Topic),
+
+		// Producer properties
+		kgo.DefaultProduceTopic(wc.Topic),
+
+		kgo.ProducerBatchMaxBytes(int32(wc.BatchMaxbytes)),
+		kgo.MaxBufferedRecords(int(wc.MaxBufferedRecords)),
+		kgo.RequiredAcks(kgo.AllISRAcks()),
+	}
+
+	// Disable auth if username not given
+	if len(wc.SaslUser) > 0 {
+		auth_mech := scram.Auth{
+			User: wc.SaslUser,
+			Pass: wc.SaslPass,
+		}
+		auth := auth_mech.AsSha256Mechanism()
+		opts = append(opts,
+			kgo.SASL(auth))
+	}
+
+	if wc.Trace {
+		opts = append(opts, kgo.WithLogger(kgo.BasicLogger(os.Stderr, kgo.LogLevelDebug, nil)))
+	}
+
+	return opts
+}
+
+func NewWorkerConfig(brokers string, trace bool, topic string, linger time.Duration, maxBufferedRecords uint) WorkerConfig {
 	return WorkerConfig{
 		Brokers:            brokers,
 		Trace:              trace,
 		Topic:              topic,
 		Linger:             linger,
 		MaxBufferedRecords: maxBufferedRecords,
-		Group:              group,
-		Partitions:         partitions,
-		KeySpace:           KeySpace{UniqueCount: keys},
-		ValueGenerator:     ValueGenerator{PayloadSize: payloadSize},
-		DataInFlight:       dataInFlight,
+		SaslUser:           "",
+		SaslPass:           "",
 	}
 }

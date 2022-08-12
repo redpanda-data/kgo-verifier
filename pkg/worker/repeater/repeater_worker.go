@@ -24,8 +24,6 @@ import (
 	"fmt"
 	"math/rand"
 	_ "net/http/pprof"
-	"os"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -54,6 +52,27 @@ type MessageBody struct {
 	Payload []byte    `json:"payload"`
 }
 
+type RepeaterConfig struct {
+	workerCfg worker.WorkerConfig
+
+	Group          string
+	Partitions     []int32
+	KeySpace       worker.KeySpace
+	ValueGenerator worker.ValueGenerator
+	DataInFlight   uint64
+}
+
+func NewRepeaterConfig(cfg worker.WorkerConfig, group string, partitions []int32, keys uint64, payloadSize uint64, dataInFlight uint64) RepeaterConfig {
+	return RepeaterConfig{
+		workerCfg:      cfg,
+		Group:          group,
+		Partitions:     partitions,
+		KeySpace:       worker.KeySpace{UniqueCount: keys},
+		ValueGenerator: worker.ValueGenerator{PayloadSize: payloadSize},
+		DataInFlight:   dataInFlight,
+	}
+}
+
 /**
  * This Worker is a 'well behaved' client that limits the number
  * of messages in flight and spreads them uniformly across partitions.
@@ -61,7 +80,7 @@ type MessageBody struct {
 type Worker struct {
 	lock sync.Mutex
 
-	config worker.WorkerConfig
+	config RepeaterConfig
 
 	totalProduced int64
 	totalConsumed int64
@@ -187,7 +206,7 @@ func (v *Worker) ResetStats() {
 	v.globalStats.Reset()
 }
 
-func NewWorker(config worker.WorkerConfig) Worker {
+func NewWorker(config RepeaterConfig) Worker {
 	consumeCtx, cancelConsume := context.WithCancel(context.Background())
 	produceCtx, cancelProduce := context.WithCancel(context.Background())
 
@@ -265,37 +284,18 @@ func (v *Worker) PrintSummary() {
 }
 
 func (v *Worker) Init() {
-	opts := []kgo.Opt{
-		kgo.SeedBrokers(strings.Split(v.config.Brokers, ",")...),
+	opts := v.config.workerCfg.MakeKgoOpts()
 
-		// Consumer properties
-		kgo.ConsumeTopics(v.config.Topic),
-
-		// TODO: producer should wait until consumer has set its initial offset
-		// to avoid leaking tokens on startup
+	opts = append(opts, []kgo.Opt{
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtEnd()),
-
-		// Producer properties
-		kgo.DefaultProduceTopic(v.config.Topic),
-		kgo.MaxBufferedRecords(int(v.config.MaxBufferedRecords)),
 		kgo.ProducerBatchMaxBytes(1024 * 1024),
 		kgo.ProducerBatchCompression(kgo.NoCompression()),
 		kgo.RecordPartitioner(kgo.StickyKeyPartitioner(nil)),
-		kgo.RequiredAcks(kgo.AllISRAcks()),
 		kgo.ConsumerGroup(v.config.Group),
-
-		// FIXME franz-go consumer hangs if setting an explicit consumer
-		// instance ID -- on the redpanda side we see it joining and rejoining
-		// the consumer group forever
-		//kgo.InstanceID("frootloops"),
-	}
+	}...)
 
 	if v.config.Group != "" {
 		opts = append(opts, kgo.ConsumerGroup(v.config.Group))
-	}
-
-	if v.config.Trace {
-		opts = append(opts, kgo.WithLogger(kgo.BasicLogger(os.Stderr, kgo.LogLevelDebug, nil)))
 	}
 
 	client, err := kgo.NewClient(opts...)

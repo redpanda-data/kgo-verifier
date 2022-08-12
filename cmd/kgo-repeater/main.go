@@ -93,9 +93,10 @@ func main() {
 
 	dataInFlightPerWorker := (*initialDataMb * 1024 * 1024) / uint64(*workers)
 
-	config := worker.NewWorkerConfig(
-		*brokers, *trace, *topic, *linger, *maxBufferedRecords, *group, partitions, *keys, *payloadSize, dataInFlightPerWorker,
+	wConfig := worker.NewWorkerConfig(
+		*brokers, *trace, *topic, *linger, *maxBufferedRecords,
 	)
+	config := repeater.NewRepeaterConfig(wConfig, *group, partitions, *keys, *payloadSize, dataInFlightPerWorker)
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
