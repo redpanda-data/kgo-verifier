@@ -36,13 +36,13 @@ type GroupWorkerStatus struct {
 
 type GroupReadWorker struct {
 	config GroupReadConfig
-	Status SeqWorkerStatus
+	Status GroupWorkerStatus
 }
 
 func NewGroupReadWorker(cfg GroupReadConfig) GroupReadWorker {
 	return GroupReadWorker{
 		config: cfg,
-		Status: SeqWorkerStatus{},
+		Status: GroupWorkerStatus{},
 	}
 }
 
@@ -192,4 +192,12 @@ func (grw *GroupReadWorker) consumerGroupReadInner(
 	}
 
 	return nil
+}
+
+func (grw *GroupReadWorker) ResetStats() {
+	grw.Status = GroupWorkerStatus{}
+}
+
+func (grw *GroupReadWorker) GetStatus() interface{} {
+	return &grw.Status
 }

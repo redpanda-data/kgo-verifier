@@ -11,8 +11,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"net/http"
 	"sync"
 
 	"github.com/redpanda-data/kgo-verifier/pkg/util"
@@ -34,13 +36,14 @@ var (
 	password           = flag.String("password", "", "SASL password")
 	mSize              = flag.Int("msg_size", 16384, "Size of messages to produce")
 	pCount             = flag.Int("produce_msgs", 1000, "Number of messages to produce")
-	cCount             = flag.Int("rand_read_msgs", 10, "Number of validation reads to do")
-	seqRead            = flag.Bool("seq_read", true, "Whether to do sequential read validation")
+	cCount             = flag.Int("rand_read_msgs", 0, "Number of validation reads to do")
+	seqRead            = flag.Bool("seq_read", false, "Whether to do sequential read validation")
 	parallelRead       = flag.Int("parallel", 1, "How many readers to run in parallel")
 	batchMaxBytes      = flag.Int("batch_max_bytes", 1048576, "the maximum batch size to allow per-partition (must be less than Kafka's max.message.bytes, producing)")
 	cgReaders          = flag.Int("consumer_group_readers", 0, "Number of parallel readers in the consumer group")
 	linger             = flag.Duration("linger", 0, "if non-zero, linger to use when producing")
 	maxBufferedRecords = flag.Uint("max-buffered-records", 1024, "Producer buffer size: the default of 1 is makes roughly one event per batch, useful for measurement.  Set to something higher to make it easier to max out bandwidth.")
+	remotePort         = flag.Uint("remote-port", 7884, "HTTP listen port for remote control/query")
 )
 
 func makeWorkerConfig() worker.WorkerConfig {
@@ -60,6 +63,10 @@ func makeWorkerConfig() worker.WorkerConfig {
 
 func main() {
 	flag.Parse()
+
+	if *topic == "" {
+		util.Die("No topic specified (use -topic)")
+	}
 
 	if *debug || *trace {
 		log.SetLevel(log.DebugLevel)
@@ -94,10 +101,38 @@ func main() {
 	nPartitions := int32(len(t.Partitions))
 	log.Debugf("Targeting topic %s with %d partitions", *topic, nPartitions)
 
+	var workers []worker.Worker
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
+		var results []interface{}
+		for _, v := range workers {
+			results = append(results, v.GetStatus())
+		}
+
+		serialized, err := json.MarshalIndent(results, "", "  ")
+		util.Chk(err, "Status serialization error")
+
+		w.WriteHeader(http.StatusOK)
+		w.Write(serialized)
+	})
+
+	mux.HandleFunc("/reset", func(w http.ResponseWriter, r *http.Request) {
+		for _, v := range workers {
+			v.ResetStats()
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	go http.ListenAndServe(fmt.Sprintf("0.0.0.0:%d", *remotePort), mux)
+
 	if *pCount > 0 {
-		pwc := verifier.NewProducerConfig(makeWorkerConfig(), "producer", nPartitions, *mSize, *cCount)
+		log.Info("Starting producer...")
+		pwc := verifier.NewProducerConfig(makeWorkerConfig(), "producer", nPartitions, *mSize, *pCount)
 		pw := verifier.NewProducerWorker(pwc)
+		workers = append(workers, &pw)
 		pw.Wait()
+		log.Info("Finished producer.")
 	}
 
 	if *parallelRead <= 1 {
@@ -105,16 +140,17 @@ func main() {
 			srw := verifier.NewSeqReadWorker(verifier.NewSeqReadConfig(
 				makeWorkerConfig(), "sequential", nPartitions,
 			))
+			workers = append(workers, &srw)
 			srw.Wait()
 		}
 
 		if *cCount > 0 {
-
 			workerCfg := verifier.NewRandomReadConfig(
 				makeWorkerConfig(), "random", nPartitions,
 			)
 
 			worker := verifier.NewRandomReadWorker(workerCfg)
+			workers = append(workers, &worker)
 			worker.Wait()
 			worker.Status.Validator.Checkpoint()
 		}
@@ -126,6 +162,7 @@ func main() {
 				srw := verifier.NewSeqReadWorker(verifier.NewSeqReadConfig(
 					makeWorkerConfig(), "sequential", nPartitions,
 				))
+				workers = append(workers, &srw)
 				srw.Wait()
 				wg.Done()
 			}()
@@ -144,6 +181,7 @@ func main() {
 						makeWorkerConfig(), "random", nPartitions,
 					)
 					worker := verifier.NewRandomReadWorker(workerCfg)
+					workers = append(workers, &worker)
 					worker.Wait()
 					worker.Status.Validator.Checkpoint()
 					wg.Done()
@@ -156,6 +194,7 @@ func main() {
 
 	if *cgReaders > 0 {
 		grw := verifier.NewGroupReadWorker(verifier.NewGroupReadConfig(makeWorkerConfig(), "groupReader", nPartitions, *cgReaders))
+		workers = append(workers, &grw)
 		grw.Wait()
 	}
 }

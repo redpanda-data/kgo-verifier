@@ -31,8 +31,6 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/twmb/franz-go/pkg/kgo"
 
-	metrics "github.com/rcrowley/go-metrics"
-
 	"github.com/redpanda-data/kgo-verifier/pkg/util"
 	worker "github.com/redpanda-data/kgo-verifier/pkg/worker"
 )
@@ -117,23 +115,9 @@ type Worker struct {
 	client *kgo.Client
 }
 
-type HistogramSummary struct {
-	P50 float64 `json:"p50"`
-	P90 float64 `json:"p90"`
-	P99 float64 `json:"p99"`
-}
-
-func SummarizeHistogram(h *metrics.Histogram) HistogramSummary {
-	return HistogramSummary{
-		P50: (*h).Percentile(0.5),
-		P90: (*h).Percentile(0.90),
-		P99: (*h).Percentile(0.99),
-	}
-}
-
 type LatencyReport struct {
-	Ack HistogramSummary `json:"ack"`
-	E2e HistogramSummary `json:"e2e"`
+	Ack worker.HistogramSummary `json:"ack"`
+	E2e worker.HistogramSummary `json:"e2e"`
 }
 
 type WorkerStatus struct {
@@ -155,8 +139,8 @@ func (v *Worker) Status() WorkerStatus {
 		Enqueued: len(v.pending),
 		Errors:   v.globalStats.Errors,
 		Latency: LatencyReport{
-			Ack: SummarizeHistogram(&v.globalStats.Ack_latency),
-			E2e: SummarizeHistogram(&v.globalStats.E2e_latency),
+			Ack: worker.SummarizeHistogram(&v.globalStats.Ack_latency),
+			E2e: worker.SummarizeHistogram(&v.globalStats.E2e_latency),
 		},
 	}
 }

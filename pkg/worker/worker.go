@@ -11,6 +11,20 @@ import (
 	"github.com/twmb/franz-go/pkg/sasl/scram"
 )
 
+type HistogramSummary struct {
+	P50 float64 `json:"p50"`
+	P90 float64 `json:"p90"`
+	P99 float64 `json:"p99"`
+}
+
+func SummarizeHistogram(h *metrics.Histogram) HistogramSummary {
+	return HistogramSummary{
+		P50: (*h).Percentile(0.5),
+		P90: (*h).Percentile(0.90),
+		P99: (*h).Percentile(0.99),
+	}
+}
+
 type MessageStats struct {
 	Produced int64
 	Consumed int64
@@ -69,12 +83,8 @@ func (ms *MessageStats) Reset() {
 }
 
 type Worker interface {
-	Start()
-	Stop()
-	Wait() Result
-}
-
-type WorkerReport struct {
+	GetStatus() interface{}
+	ResetStats()
 }
 
 type KeySpace struct {

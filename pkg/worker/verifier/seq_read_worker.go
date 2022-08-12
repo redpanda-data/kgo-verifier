@@ -128,3 +128,11 @@ func (srw *SeqReadWorker) sequentialReadInner(startAt []int64, upTo []int64) ([]
 
 	return last_read, nil
 }
+
+func (srw *SeqReadWorker) ResetStats() {
+	srw.Status = SeqWorkerStatus{}
+}
+
+func (srw *SeqReadWorker) GetStatus() interface{} {
+	return &srw.Status
+}

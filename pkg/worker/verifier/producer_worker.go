@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rcrowley/go-metrics"
 	"github.com/redpanda-data/kgo-verifier/pkg/util"
 	worker "github.com/redpanda-data/kgo-verifier/pkg/worker"
 	log "github.com/sirupsen/logrus"
@@ -71,10 +72,15 @@ type ProducerWorkerStatus struct {
 
 	// How many messages landed at an unexpected offset?
 	// (indicates retries/resends)
-	BadOffsets int64 `json:"acked"`
+	BadOffsets int64 `json:"bad_offsets"`
 
 	// How many times did we restart the producer loop?
 	Restarts int64 `json:"restarts"`
+
+	// Ack latency: a private histogram for the data,
+	// and a public summary for JSON output
+	latency metrics.Histogram
+	Latency worker.HistogramSummary `json:"latency"`
 
 	lock sync.Mutex
 
@@ -85,6 +91,7 @@ type ProducerWorkerStatus struct {
 func NewProducerWorkerStatus() ProducerWorkerStatus {
 	return ProducerWorkerStatus{
 		lastCheckpoint: time.Now(),
+		latency:        metrics.NewHistogram(metrics.NewExpDecaySample(1024, 0.015)),
 	}
 }
 
@@ -178,6 +185,8 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset) {
 		wg.Add(1)
 
 		log.Debugf("Writing partition %d at %d", r.Partition, nextOffset[p])
+
+		sentAt := time.Now()
 		handler := func(r *kgo.Record, err error) {
 			concurrent.Release(1)
 			util.Chk(err, "Produce failed: %v", err)
@@ -188,7 +197,9 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset) {
 				errored = true
 				log.Debugf("errored = %b", errored)
 			} else {
+				ackLatency := time.Now().Sub(sentAt)
 				pw.Status.OnAcked()
+				pw.Status.latency.Update(ackLatency.Microseconds())
 				pw.validOffsets.Insert(r.Partition, r.Offset)
 				log.Debugf("Wrote partition %d at %d", r.Partition, r.Offset)
 			}
@@ -228,4 +239,15 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset) {
 		wg.Wait()
 		return produced, nil
 	}
+}
+
+func (pw *ProducerWorker) ResetStats() {
+	pw.Status = NewProducerWorkerStatus()
+}
+
+func (pw *ProducerWorker) GetStatus() interface{} {
+	// Update public summary from private statustics
+	pw.Status.Latency = worker.SummarizeHistogram(&pw.Status.latency)
+
+	return &pw.Status
 }

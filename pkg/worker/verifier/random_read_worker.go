@@ -22,10 +22,10 @@ type RandomReadConfig struct {
 
 type RandomReadWorker struct {
 	config RandomReadConfig
-	Status WorkerStatus
+	Status RandomWorkerStatus
 }
 
-type WorkerStatus struct {
+type RandomWorkerStatus struct {
 	Validator ValidatorStatus `json:"validator"`
 	Errors    int             `json:"errors"`
 }
@@ -41,7 +41,7 @@ func NewRandomReadConfig(wc worker.WorkerConfig, name string, nPartitions int32)
 func NewRandomReadWorker(cfg RandomReadConfig) RandomReadWorker {
 	return RandomReadWorker{
 		config: cfg,
-		Status: WorkerStatus{},
+		Status: RandomWorkerStatus{},
 	}
 }
 
@@ -127,4 +127,12 @@ func (w *RandomReadWorker) Wait() {
 		client.Flush(context.Background())
 		client.Close()
 	}
+}
+
+func (rrw *RandomReadWorker) ResetStats() {
+	rrw.Status = RandomWorkerStatus{}
+}
+
+func (rrw *RandomReadWorker) GetStatus() interface{} {
+	return &rrw.Status
 }
