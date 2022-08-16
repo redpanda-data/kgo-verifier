@@ -15,6 +15,8 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"os"
+	"os/signal"
 	"sync"
 
 	"github.com/redpanda-data/kgo-verifier/pkg/util"
@@ -43,6 +45,7 @@ var (
 	cgReaders          = flag.Int("consumer_group_readers", 0, "Number of parallel readers in the consumer group")
 	linger             = flag.Duration("linger", 0, "if non-zero, linger to use when producing")
 	maxBufferedRecords = flag.Uint("max-buffered-records", 1024, "Producer buffer size: the default of 1 is makes roughly one event per batch, useful for measurement.  Set to something higher to make it easier to max out bandwidth.")
+	remote             = flag.Bool("remote", false, "Remote control mode, driven by HTTP calls, for use in automated tests")
 	remotePort         = flag.Uint("remote-port", 7884, "HTTP listen port for remote control/query")
 )
 
@@ -73,6 +76,11 @@ func main() {
 	} else {
 		log.SetLevel(log.InfoLevel)
 	}
+
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, os.Interrupt)
+
+	shutdownChan := make(chan int, 1)
 
 	log.Info("Getting topic metadata...")
 	conf := makeWorkerConfig()
@@ -122,6 +130,10 @@ func main() {
 			v.ResetStats()
 		}
 		w.WriteHeader(http.StatusOK)
+	})
+
+	mux.HandleFunc("/shutdown", func(w http.ResponseWriter, r *http.Request) {
+		shutdownChan <- 1
 	})
 
 	go http.ListenAndServe(fmt.Sprintf("0.0.0.0:%d", *remotePort), mux)
@@ -197,4 +209,16 @@ func main() {
 		workers = append(workers, &grw)
 		grw.Wait()
 	}
+
+	if *remote {
+		log.Info("Waiting for remote shutdown request")
+		select {
+		case <-signalChan:
+			log.Info("Stopping on signal...")
+			return
+		case <-shutdownChan:
+			log.Info("Remote requested shutdown, proceeding")
+		}
+	}
+
 }
