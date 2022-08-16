@@ -27,14 +27,16 @@ type RandomReadWorker struct {
 
 type RandomWorkerStatus struct {
 	Validator ValidatorStatus `json:"validator"`
+	Active    bool            `json:"active"`
 	Errors    int             `json:"errors"`
 }
 
-func NewRandomReadConfig(wc worker.WorkerConfig, name string, nPartitions int32) RandomReadConfig {
+func NewRandomReadConfig(wc worker.WorkerConfig, name string, nPartitions int32, readCount int) RandomReadConfig {
 	return RandomReadConfig{
 		workerCfg:   wc,
 		name:        name,
 		nPartitions: nPartitions,
+		readCount:   readCount,
 	}
 }
 
@@ -49,11 +51,14 @@ func (w *RandomReadWorker) newClient(opts []kgo.Opt) *kgo.Client {
 	opts = append(opts, w.config.workerCfg.MakeKgoOpts()...)
 
 	client, err := kgo.NewClient(opts...)
-	util.Chk(err, "Error creating kafka client")
+	util.Chk(err, "Error creating kafka client %v", err)
 	return client
 }
 
 func (w *RandomReadWorker) Wait() {
+	w.Status.Active = true
+	defer func() { w.Status.Active = false }()
+
 	// Basic client to read offsets
 	client := w.newClient(make([]kgo.Opt, 0))
 	endOffsets := GetOffsets(client, w.config.workerCfg.Topic, w.config.nPartitions, -1)

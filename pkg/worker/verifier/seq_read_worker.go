@@ -25,6 +25,7 @@ func NewSeqReadConfig(wc worker.WorkerConfig, name string, nPartitions int32) Se
 
 type SeqWorkerStatus struct {
 	Validator ValidatorStatus `json:"validator"`
+	Active    bool            `json:"active"`
 	Errors    int             `json:"errors"`
 }
 
@@ -41,6 +42,9 @@ func NewSeqReadWorker(cfg SeqReadConfig) SeqReadWorker {
 }
 
 func (srw *SeqReadWorker) Wait() {
+	srw.Status.Active = true
+	defer func() { srw.Status.Active = false }()
+
 	client, err := kgo.NewClient(srw.config.workerCfg.MakeKgoOpts()...)
 	util.Chk(err, "Error creating kafka client")
 

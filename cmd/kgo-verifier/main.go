@@ -47,6 +47,7 @@ var (
 	maxBufferedRecords = flag.Uint("max-buffered-records", 1024, "Producer buffer size: the default of 1 is makes roughly one event per batch, useful for measurement.  Set to something higher to make it easier to max out bandwidth.")
 	remote             = flag.Bool("remote", false, "Remote control mode, driven by HTTP calls, for use in automated tests")
 	remotePort         = flag.Uint("remote-port", 7884, "HTTP listen port for remote control/query")
+	loop               = flag.Bool("loop", false, "For readers, run indefinitely until stopped via signal or HTTP call")
 )
 
 func makeWorkerConfig() worker.WorkerConfig {
@@ -80,7 +81,12 @@ func main() {
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt)
 
+	// Once we are done, keep the process alive until this channel is fired
 	shutdownChan := make(chan int, 1)
+
+	// For sequential consumers, keep re-reading the topic from start until
+	// this channel is fired.
+	lastPassChan := make(chan int, 1)
 
 	log.Info("Getting topic metadata...")
 	conf := makeWorkerConfig()
@@ -126,6 +132,7 @@ func main() {
 	})
 
 	mux.HandleFunc("/reset", func(w http.ResponseWriter, r *http.Request) {
+		log.Info("Remote request /reset")
 		for _, v := range workers {
 			v.ResetStats()
 		}
@@ -133,7 +140,13 @@ func main() {
 	})
 
 	mux.HandleFunc("/shutdown", func(w http.ResponseWriter, r *http.Request) {
+		log.Info("Remote request /shutdown")
 		shutdownChan <- 1
+	})
+
+	mux.HandleFunc("/last_pass", func(w http.ResponseWriter, r *http.Request) {
+		log.Info("Remote request /last_pass")
+		lastPassChan <- 1
 	})
 
 	go http.ListenAndServe(fmt.Sprintf("0.0.0.0:%d", *remotePort), mux)
@@ -153,18 +166,27 @@ func main() {
 				makeWorkerConfig(), "sequential", nPartitions,
 			))
 			workers = append(workers, &srw)
-			srw.Wait()
+
+			firstPass := true
+			for firstPass || (len(lastPassChan) == 0 && *loop) {
+				firstPass = false
+				srw.Wait()
+			}
 		}
 
 		if *cCount > 0 {
 			workerCfg := verifier.NewRandomReadConfig(
-				makeWorkerConfig(), "random", nPartitions,
+				makeWorkerConfig(), "random", nPartitions, *cCount,
 			)
 
 			worker := verifier.NewRandomReadWorker(workerCfg)
 			workers = append(workers, &worker)
-			worker.Wait()
-			worker.Status.Validator.Checkpoint()
+			firstPass := true
+			for firstPass || (len(lastPassChan) == 0 && *loop) {
+				firstPass = false
+				worker.Wait()
+				worker.Status.Validator.Checkpoint()
+			}
 		}
 	} else {
 		var wg sync.WaitGroup
@@ -186,22 +208,30 @@ func main() {
 		}
 
 		if *cCount > 0 {
+			firstPass := true
+			var randomWorkers []*verifier.RandomReadWorker
 			for i := 0; i < parallelRandoms; i++ {
-				wg.Add(1)
-				go func(tag string) {
-					workerCfg := verifier.NewRandomReadConfig(
-						makeWorkerConfig(), "random", nPartitions,
-					)
-					worker := verifier.NewRandomReadWorker(workerCfg)
-					workers = append(workers, &worker)
-					worker.Wait()
-					worker.Status.Validator.Checkpoint()
-					wg.Done()
-				}(fmt.Sprintf("%03d", i))
+				workerCfg := verifier.NewRandomReadConfig(
+					makeWorkerConfig(), fmt.Sprintf("random-%03d", i), nPartitions, *cCount,
+				)
+				worker := verifier.NewRandomReadWorker(workerCfg)
+				randomWorkers = append(randomWorkers, &worker)
+				workers = append(workers, &worker)
+			}
+
+			for firstPass || (len(lastPassChan) == 0 && *loop) {
+				firstPass = false
+				for _, w := range randomWorkers {
+					wg.Add(1)
+					go func() {
+						w.Wait()
+						w.Status.Validator.Checkpoint()
+						wg.Done()
+					}()
+				}
+				wg.Wait()
 			}
 		}
-
-		wg.Wait()
 	}
 
 	if *cgReaders > 0 {

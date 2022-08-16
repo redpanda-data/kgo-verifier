@@ -110,9 +110,6 @@ func (wc *WorkerConfig) MakeKgoOpts() []kgo.Opt {
 	opts := []kgo.Opt{
 		kgo.SeedBrokers(strings.Split(wc.Brokers, ",")...),
 
-		// Consumer properties
-		kgo.ConsumeTopics(wc.Topic),
-
 		// Producer properties
 		kgo.DefaultProduceTopic(wc.Topic),
 

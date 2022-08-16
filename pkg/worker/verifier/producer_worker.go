@@ -82,6 +82,8 @@ type ProducerWorkerStatus struct {
 	latency metrics.Histogram
 	Latency worker.HistogramSummary `json:"latency"`
 
+	Active bool `json:"latency"`
+
 	lock sync.Mutex
 
 	// For emitting checkpoints on time intervals
@@ -118,6 +120,8 @@ func (pw *ProducerWorker) produceCheckpoint() {
 }
 
 func (pw *ProducerWorker) Wait() {
+	pw.Status.Active = true
+	defer func() { pw.Status.Active = false }()
 
 	n := int64(pw.config.messageCount)
 

@@ -31,6 +31,7 @@ func NewGroupReadConfig(wc worker.WorkerConfig, name string, nPartitions int32, 
 
 type GroupWorkerStatus struct {
 	Validator ValidatorStatus `json:"validator"`
+	Active    bool            `json:"active"`
 	Errors    int             `json:"errors"`
 }
 
@@ -92,6 +93,9 @@ func (cgs *ConsumerGroupOffsets) AddRecord(r *kgo.Record) {
 }
 
 func (grw *GroupReadWorker) Wait() {
+	grw.Status.Active = true
+	defer func() { grw.Status.Active = false }()
+
 	client, err := kgo.NewClient(grw.config.workerCfg.MakeKgoOpts()...)
 	util.Chk(err, "Error creating kafka client")
 
@@ -151,6 +155,7 @@ func (grw *GroupReadWorker) consumerGroupReadInner(
 
 	opts := grw.config.workerCfg.MakeKgoOpts()
 	opts = append(opts, []kgo.Opt{
+		kgo.ConsumeTopics(grw.config.workerCfg.Topic),
 		kgo.ConsumerGroup(groupName),
 	}...)
 	client, err := kgo.NewClient(opts...)
