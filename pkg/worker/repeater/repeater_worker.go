@@ -271,6 +271,7 @@ func (v *Worker) Init() {
 	opts := v.config.workerCfg.MakeKgoOpts()
 
 	opts = append(opts, []kgo.Opt{
+		kgo.ConsumeTopics(v.config.workerCfg.Topic),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtEnd()),
 		kgo.ProducerBatchMaxBytes(1024 * 1024),
 		kgo.ProducerBatchCompression(kgo.NoCompression()),
