@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/redpanda-data/kgo-verifier/pkg/util"
 	worker "github.com/redpanda-data/kgo-verifier/pkg/worker"
 	log "github.com/sirupsen/logrus"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -92,12 +91,15 @@ func (cgs *ConsumerGroupOffsets) AddRecord(r *kgo.Record) {
 	}
 }
 
-func (grw *GroupReadWorker) Wait() {
+func (grw *GroupReadWorker) Wait() error {
 	grw.Status.Active = true
 	defer func() { grw.Status.Active = false }()
 
 	client, err := kgo.NewClient(grw.config.workerCfg.MakeKgoOpts()...)
-	util.Chk(err, "Error creating kafka client")
+	if err != nil {
+		log.Errorf("Error constructing client: %v", err)
+		return err
+	}
 
 	startOffsets := GetOffsets(client, grw.config.workerCfg.Topic, grw.config.nPartitions, -2)
 	hwms := GetOffsets(client, grw.config.workerCfg.Topic, grw.config.nPartitions, -1)
@@ -113,7 +115,7 @@ func (grw *GroupReadWorker) Wait() {
 
 	if !hasMessages {
 		log.Infof("Topic is empty, exiting...")
-		return
+		return nil
 	}
 
 	groupName := fmt.Sprintf("kgo-verifier-%d-%d", time.Now().Unix(), os.Getpid())
@@ -146,6 +148,7 @@ func (grw *GroupReadWorker) Wait() {
 
 	wg.Wait()
 	status.Checkpoint()
+	return nil
 }
 
 func (grw *GroupReadWorker) consumerGroupReadInner(
@@ -159,7 +162,11 @@ func (grw *GroupReadWorker) consumerGroupReadInner(
 		kgo.ConsumerGroup(groupName),
 	}...)
 	client, err := kgo.NewClient(opts...)
-	util.Chk(err, "Error creating kafka client")
+	if err != nil {
+		// Our caller can retry us.
+		log.Warnf("Error creating kafka client: %v", err)
+		return err
+	}
 	defer client.Close()
 
 	validRanges := LoadTopicOffsetRanges(grw.config.workerCfg.Topic, grw.config.nPartitions)

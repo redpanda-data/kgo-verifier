@@ -156,7 +156,10 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset) {
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
 	}...)
 	client, err := kgo.NewClient(opts...)
-	util.Chk(err, "Error creating kafka client")
+	if err != nil {
+		log.Errorf("Error creating Kafka client: %v", err)
+		return 0, nil, err
+	}
 
 	nextOffset := GetOffsets(client, pw.config.workerCfg.Topic, pw.config.nPartitions, -1)
 

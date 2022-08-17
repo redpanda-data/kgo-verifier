@@ -47,23 +47,33 @@ func NewRandomReadWorker(cfg RandomReadConfig) RandomReadWorker {
 	}
 }
 
-func (w *RandomReadWorker) newClient(opts []kgo.Opt) *kgo.Client {
+func (w *RandomReadWorker) newClient(opts []kgo.Opt) (*kgo.Client, error) {
 	opts = append(opts, w.config.workerCfg.MakeKgoOpts()...)
 
 	client, err := kgo.NewClient(opts...)
-	util.Chk(err, "Error creating kafka client %v", err)
-	return client
+	if err != nil {
+		return nil, err
+	}
+	return client, nil
 }
 
-func (w *RandomReadWorker) Wait() {
+func (w *RandomReadWorker) Wait() error {
 	w.Status.Active = true
 	defer func() { w.Status.Active = false }()
 
 	// Basic client to read offsets
-	client := w.newClient(make([]kgo.Opt, 0))
+	client, err := w.newClient(make([]kgo.Opt, 0))
+	if err != nil {
+		log.Errorf("Error constructing client: %v", err)
+		return err
+	}
 	endOffsets := GetOffsets(client, w.config.workerCfg.Topic, w.config.nPartitions, -1)
 	client.Close()
-	client = w.newClient(make([]kgo.Opt, 0))
+	client, err = w.newClient(make([]kgo.Opt, 0))
+	if err != nil {
+		log.Errorf("Error constructing client: %v", err)
+		return err
+	}
 	startOffsets := GetOffsets(client, w.config.workerCfg.Topic, w.config.nPartitions, -2)
 	client.Close()
 	runtime.GC()
@@ -101,7 +111,11 @@ func (w *RandomReadWorker) Wait() {
 			kgo.ConsumePartitions(offsets),
 		}
 
-		client = w.newClient(opts)
+		client, err = w.newClient(opts)
+		if err != nil {
+			log.Errorf("Error constructing client: %v", err)
+			return err
+		}
 
 		// Read one record
 		ctxLog.Debugf("Reading partition %d (%d-%d) at offset %d", p, pStart, pEnd, offset)
@@ -132,6 +146,8 @@ func (w *RandomReadWorker) Wait() {
 		client.Flush(context.Background())
 		client.Close()
 	}
+
+	return nil
 }
 
 func (rrw *RandomReadWorker) ResetStats() {

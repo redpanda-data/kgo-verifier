@@ -68,7 +68,7 @@ func main() {
 		kgo.SeedBrokers(strings.Split(*brokers, ",")...),
 	}
 	client, err := kgo.NewClient(opts...)
-	util.Chk(err, "Error creating kafka client")
+	util.Chk(err, "Error creating kafka client: %v", err)
 
 	var t kmsg.MetadataResponseTopic
 	{

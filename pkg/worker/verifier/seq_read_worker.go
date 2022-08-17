@@ -3,7 +3,6 @@ package verifier
 import (
 	"context"
 
-	"github.com/redpanda-data/kgo-verifier/pkg/util"
 	worker "github.com/redpanda-data/kgo-verifier/pkg/worker"
 	log "github.com/sirupsen/logrus"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -41,12 +40,15 @@ func NewSeqReadWorker(cfg SeqReadConfig) SeqReadWorker {
 	}
 }
 
-func (srw *SeqReadWorker) Wait() {
+func (srw *SeqReadWorker) Wait() error {
 	srw.Status.Active = true
 	defer func() { srw.Status.Active = false }()
 
 	client, err := kgo.NewClient(srw.config.workerCfg.MakeKgoOpts()...)
-	util.Chk(err, "Error creating kafka client")
+	if err != nil {
+		log.Errorf("Error constructing client: %v", err)
+		return err
+	}
 
 	hwm := GetOffsets(client, srw.config.workerCfg.Topic, srw.config.nPartitions, -1)
 	lwm := make([]int64, srw.config.nPartitions)
@@ -60,7 +62,7 @@ func (srw *SeqReadWorker) Wait() {
 			// Loop around
 		} else {
 			status.Checkpoint()
-			return
+			return nil
 		}
 	}
 }
@@ -87,7 +89,10 @@ func (srw *SeqReadWorker) sequentialReadInner(startAt []int64, upTo []int64) ([]
 		kgo.ConsumePartitions(offsets),
 	}...)
 	client, err := kgo.NewClient(opts...)
-	util.Chk(err, "Error creating kafka client")
+	if err != nil {
+		log.Errorf("Error creating Kafka client: %v", err)
+		return nil, err
+	}
 
 	last_read := make([]int64, srw.config.nPartitions)
 
