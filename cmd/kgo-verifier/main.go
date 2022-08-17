@@ -37,8 +37,8 @@ var (
 	username           = flag.String("username", "", "SASL username")
 	password           = flag.String("password", "", "SASL password")
 	mSize              = flag.Int("msg_size", 16384, "Size of messages to produce")
-	pCount             = flag.Int("produce_msgs", 1000, "Number of messages to produce")
-	cCount             = flag.Int("rand_read_msgs", 0, "Number of validation reads to do")
+	pCount             = flag.Int("produce_msgs", 0, "Number of messages to produce")
+	cCount             = flag.Int("rand_read_msgs", 0, "Number of validation reads to do from each random reader")
 	seqRead            = flag.Bool("seq_read", false, "Whether to do sequential read validation")
 	parallelRead       = flag.Int("parallel", 1, "How many readers to run in parallel")
 	batchMaxBytes      = flag.Int("batch_max_bytes", 1048576, "the maximum batch size to allow per-partition (must be less than Kafka's max.message.bytes, producing)")
@@ -156,88 +156,67 @@ func main() {
 		pwc := verifier.NewProducerConfig(makeWorkerConfig(), "producer", nPartitions, *mSize, *pCount)
 		pw := verifier.NewProducerWorker(pwc)
 		workers = append(workers, &pw)
-		pw.Wait()
+		waitErr := pw.Wait()
+		util.Chk(err, "Producer error: %v", waitErr)
 		log.Info("Finished producer.")
 	}
 
-	if *parallelRead <= 1 {
-		if *seqRead {
-			srw := verifier.NewSeqReadWorker(verifier.NewSeqReadConfig(
-				makeWorkerConfig(), "sequential", nPartitions,
-			))
-			workers = append(workers, &srw)
+	if *seqRead {
+		srw := verifier.NewSeqReadWorker(verifier.NewSeqReadConfig(
+			makeWorkerConfig(), "sequential", nPartitions,
+		))
+		workers = append(workers, &srw)
 
-			firstPass := true
-			for firstPass || (len(lastPassChan) == 0 && *loop) {
-				firstPass = false
-				srw.Wait()
+		firstPass := true
+		for firstPass || (len(lastPassChan) == 0 && *loop) {
+			log.Info("Starting sequential read pass")
+			firstPass = false
+			waitErr := srw.Wait()
+			if waitErr != nil {
+				// Proceed around the loop, to be tolerant of e.g. kafka client
+				// construct failures on unavailable cluster
+				log.Warnf("Error from sequeqntial read worker: %v", err)
 			}
 		}
+	}
 
-		if *cCount > 0 {
-			workerCfg := verifier.NewRandomReadConfig(
-				makeWorkerConfig(), "random", nPartitions, *cCount,
-			)
-
-			worker := verifier.NewRandomReadWorker(workerCfg)
-			workers = append(workers, &worker)
-			firstPass := true
-			for firstPass || (len(lastPassChan) == 0 && *loop) {
-				firstPass = false
-				worker.Wait()
-				worker.Status.Validator.Checkpoint()
-			}
-		}
-	} else {
+	if *cCount > 0 {
 		var wg sync.WaitGroup
-		if *seqRead {
-			wg.Add(1)
-			go func() {
-				srw := verifier.NewSeqReadWorker(verifier.NewSeqReadConfig(
-					makeWorkerConfig(), "sequential", nPartitions,
-				))
-				workers = append(workers, &srw)
-				srw.Wait()
-				wg.Done()
-			}()
+		var randomWorkers []*verifier.RandomReadWorker
+		for i := 0; i < *parallelRead; i++ {
+			workerCfg := verifier.NewRandomReadConfig(
+				makeWorkerConfig(), fmt.Sprintf("random-%03d", i), nPartitions, *cCount,
+			)
+			worker := verifier.NewRandomReadWorker(workerCfg)
+			randomWorkers = append(randomWorkers, &worker)
+			workers = append(workers, &worker)
 		}
 
-		parallelRandoms := *parallelRead
-		if *seqRead {
-			parallelRandoms -= 1
-		}
-
-		if *cCount > 0 {
-			firstPass := true
-			var randomWorkers []*verifier.RandomReadWorker
-			for i := 0; i < parallelRandoms; i++ {
-				workerCfg := verifier.NewRandomReadConfig(
-					makeWorkerConfig(), fmt.Sprintf("random-%03d", i), nPartitions, *cCount,
-				)
-				worker := verifier.NewRandomReadWorker(workerCfg)
-				randomWorkers = append(randomWorkers, &worker)
-				workers = append(workers, &worker)
+		firstPass := true
+		for firstPass || (len(lastPassChan) == 0 && *loop) {
+			firstPass = false
+			for _, w := range randomWorkers {
+				wg.Add(1)
+				go func(worker *verifier.RandomReadWorker) {
+					waitErr := worker.Wait()
+					if waitErr != nil {
+						// Proceed around the loop, to be tolerant of e.g. kafka client
+						// construct failures on unavailable cluster
+						log.Warnf("Error from random worker: %v", err)
+					}
+					worker.Status.Validator.Checkpoint()
+					wg.Done()
+				}(w)
 			}
-
-			for firstPass || (len(lastPassChan) == 0 && *loop) {
-				firstPass = false
-				for _, w := range randomWorkers {
-					wg.Add(1)
-					go func() {
-						w.Wait()
-						w.Status.Validator.Checkpoint()
-						wg.Done()
-					}()
-				}
-				wg.Wait()
-			}
+			wg.Wait()
 		}
 	}
 
 	if *cgReaders > 0 {
 		grw := verifier.NewGroupReadWorker(verifier.NewGroupReadConfig(makeWorkerConfig(), "groupReader", nPartitions, *cgReaders))
 		workers = append(workers, &grw)
-		grw.Wait()
+		waitErr := grw.Wait()
+		util.Chk(waitErr, "Consumer error: %v", err)
 	}
 
 	if *remote {

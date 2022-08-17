@@ -119,14 +119,17 @@ func (pw *ProducerWorker) produceCheckpoint() {
 	os.Stdout.Write([]byte("\n"))
 }
 
-func (pw *ProducerWorker) Wait() {
+func (pw *ProducerWorker) Wait() error {
 	pw.Status.Active = true
 	defer func() { pw.Status.Active = false }()
 
 	n := int64(pw.config.messageCount)
 
 	for {
-		n_produced, bad_offsets := pw.produceInner(n)
+		n_produced, bad_offsets, err := pw.produceInner(n)
+		if err != nil {
+			return err
+		}
 		n = n - n_produced
 
 		if len(bad_offsets) > 0 {
@@ -134,7 +137,7 @@ func (pw *ProducerWorker) Wait() {
 		}
 
 		if n <= 0 {
-			return
+			return nil
 		} else {
 			// Record that we took another run at produceInner
 			pw.Status.Restarts += 1
@@ -147,7 +150,7 @@ type BadOffset struct {
 	O int64
 }
 
-func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset) {
+func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 	opts := pw.config.workerCfg.MakeKgoOpts()
 
 	opts = append(opts, []kgo.Opt{
@@ -241,10 +244,10 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset) {
 			util.Die("No bad offsets but errored?")
 		}
 		successful_produced := produced - int64(len(r))
-		return successful_produced, r
+		return successful_produced, r, nil
 	} else {
 		wg.Wait()
-		return produced, nil
+		return produced, nil, nil
 	}
 }
 
