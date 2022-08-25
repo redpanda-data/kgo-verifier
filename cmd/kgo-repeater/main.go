@@ -93,19 +93,24 @@ func main() {
 
 	dataInFlightPerWorker := (*initialDataMb * 1024 * 1024) / uint64(*workers)
 
-	wConfig := worker.NewWorkerConfig(
-		*brokers, *trace, *topic, *linger, *maxBufferedRecords,
-	)
-	config := repeater.NewRepeaterConfig(wConfig, *group, partitions, *keys, *payloadSize, dataInFlightPerWorker)
-
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
 
 	var verifiers []*repeater.Worker
 
+	hostName, err := os.Hostname()
+	util.Chk(err, "Error getting hostname %v", err)
+
+	pid := os.Getpid()
+
 	log.Infof("Preparing %d workers...", *workers)
 	for i := uint(0); i < *workers; i++ {
-		log.Debugf("Preparing worker %d...", i)
+		name := fmt.Sprintf("%s_%d_w_%d", hostName, pid, i)
+		log.Debugf("Preparing worker %s...", name)
+		wConfig := worker.NewWorkerConfig(
+			name, *brokers, *trace, *topic, *linger, *maxBufferedRecords,
+		)
+		config := repeater.NewRepeaterConfig(wConfig, *group, partitions, *keys, *payloadSize, dataInFlightPerWorker)
 		lv := repeater.NewWorker(config)
 		lv.Prepare()
 		verifiers = append(verifiers, &lv)

@@ -38,6 +38,10 @@ type MessageStats struct {
 
 	// Latency from calling produce to receiving message in consumer
 	E2e_latency metrics.Histogram
+
+	// Server errors that caused us to tear down and rebuild the client
+	// to proceed: these are potential redpanda bugs.
+	Rebuilds int64
 }
 
 func NewMessageStats() MessageStats {
@@ -96,6 +100,7 @@ type ValueGenerator struct {
 }
 
 type WorkerConfig struct {
+	Name               string
 	Brokers            string
 	Trace              bool
 	Topic              string
@@ -118,6 +123,11 @@ func (wc *WorkerConfig) MakeKgoOpts() []kgo.Opt {
 		kgo.RequiredAcks(kgo.AllISRAcks()),
 	}
 
+	if wc.Name != "" {
+		opts = append(opts, kgo.ClientID(wc.Name))
+
+	}
+
 	// Disable auth if username not given
 	if len(wc.SaslUser) > 0 {
 		auth_mech := scram.Auth{
@@ -130,14 +140,17 @@ func (wc *WorkerConfig) MakeKgoOpts() []kgo.Opt {
 	}
 
 	if wc.Trace {
-		opts = append(opts, kgo.WithLogger(kgo.BasicLogger(os.Stderr, kgo.LogLevelDebug, nil)))
+		opts = append(opts, kgo.WithLogger(kgo.BasicLogger(os.Stderr, kgo.LogLevelDebug, func() string {
+			return fmt.Sprintf("time=\"%s\" name=%s", time.Now().UTC().Format(time.RFC3339), wc.Name)
+		})))
 	}
 
 	return opts
 }
 
-func NewWorkerConfig(brokers string, trace bool, topic string, linger time.Duration, maxBufferedRecords uint) WorkerConfig {
+func NewWorkerConfig(name string, brokers string, trace bool, topic string, linger time.Duration, maxBufferedRecords uint) WorkerConfig {
 	return WorkerConfig{
+		Name:               name,
 		Brokers:            brokers,
 		Trace:              trace,
 		Topic:              topic,

@@ -25,7 +25,6 @@ import (
 	"math/rand"
 	_ "net/http/pprof"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -51,8 +50,7 @@ type MessageBody struct {
 }
 
 type RepeaterConfig struct {
-	workerCfg worker.WorkerConfig
-
+	workerCfg      worker.WorkerConfig
 	Group          string
 	Partitions     []int32
 	KeySpace       worker.KeySpace
@@ -228,15 +226,15 @@ func (v *Worker) ConsumeRecord(r *kgo.Record) {
 
 	v.totalConsumed += 1
 
-	log.Debugf("Consume got record on partition %d...", r.Partition)
+	log.Debugf("Consume %s got record on partition %d...", v.config.workerCfg.Name, r.Partition)
 
 	message := MessageBody{}
 	err := json.Unmarshal(r.Value, &message)
 	if err != nil {
 		// This typically happens if the topic was used by other
 		// traffic generators at the same time.
-		log.Errorf("Parse error on body from %s.%d offset %d: %s",
-			r.Topic, r.Partition, r.Offset,
+		log.Errorf("Consume %s parse error on body from %s.%d offset %d: %s",
+			v.config.workerCfg.Name, r.Topic, r.Partition, r.Offset,
 			r.Value[0:64])
 		v.globalStats.Errors += 1
 		return
@@ -249,22 +247,8 @@ func (v *Worker) ConsumeRecord(r *kgo.Record) {
 
 	v.globalStats.E2e_latency.Update(e2e_latency.Microseconds())
 
-	log.Debugf("Consumed token %06d, total latency %s", token, e2e_latency)
+	log.Debugf("Consume %s token %06d, total latency %s", v.config.workerCfg.Name, token, e2e_latency)
 	v.pending <- int64(token)
-}
-
-func (v *Worker) printSummary() {
-	v.lock.Lock()
-	defer v.lock.Unlock()
-}
-
-func (v *Worker) PrintSummary() {
-	if atomic.LoadInt64(&v.totalProduced) > 10000 {
-		v.Stop()
-	}
-	v.printSummary()
-	fmt.Println("Total produced", v.totalProduced,
-		"consumed", v.totalConsumed)
 }
 
 func (v *Worker) Init() {
@@ -314,15 +298,15 @@ func (v *Worker) Produce() {
 loop:
 	for {
 		// Drop out if signalled to stop
-		log.Debugf("Produce checking for token...")
+		log.Debugf("Produce %s checking for token...", v.config.workerCfg.Name)
 
 		var token int64
 		select {
 		case <-v.produceCtx.Done():
-			log.Info("Consumer got Done signal")
+			log.Infof("Produce %s got Done signal", v.config.workerCfg.Name)
 			break loop
 		case token = <-v.pending:
-			log.Debugf("Produce sending token %d", token)
+			log.Debugf("Produce %s sending token %d", v.config.workerCfg.Name, token)
 		}
 
 		var maxKey uint64
@@ -350,11 +334,11 @@ loop:
 		handler := func(r *kgo.Record, err error) {
 			// FIXME: error doesn't necessarily mean the write wasn't committed:
 			// consumer needs logic to handle the unexpected token
-			log.Debugf("Produce acked %d on partition %d offset %d", token, r.Partition, r.Offset)
+			log.Debugf("Produce %s acked %d on partition %d offset %d", v.config.workerCfg.Name, token, r.Partition, r.Offset)
 			if err != nil {
 				// On produce error, we drop the token: we rely on producer errors
 				// being rare and/or a background Tuner re-injecting fresh tokens
-				log.Errorf("Produce error, dropped token %d: %v", token, err)
+				log.Errorf("Produce %s error, dropped token %d: %v", v.config.workerCfg.Name, token, err)
 				v.globalStats.Errors += 1
 				v.tokenRevokeCount += 1
 			} else {
@@ -392,23 +376,28 @@ loop:
 			// Do nothing
 		}
 
-		log.Debugf("Consume fetching...")
+		log.Debugf("Consume %s fetching...", v.config.workerCfg.Name)
 		fetches := v.client.PollFetches(v.consumeCtx)
-		log.Debugf("Consume fetched %d records", len(fetches.Records()))
+		log.Debugf("Consume %s fetched %d records", v.config.workerCfg.Name, len(fetches.Records()))
 
 		fetches.EachError(func(t string, p int32, err error) {
 			// This is non-fatal because it includes e.g. a topic getting
 			// prefix-truncated on retention limits, and thereby getting
 			// a "lost records" on the consumer
-			log.Errorf("topic %s partition %d had error: %v", t, p, err)
+			log.Errorf("Consume %s topic %s partition %d had error: %v", v.config.workerCfg.Name, t, p, err)
 		})
+
+		if len(fetches.Records()) == 0 && len(fetches.Errors()) == 0 {
+			log.Warnf("Consumed %s got empty fetch result", v.config.workerCfg.Name)
+
+		}
 
 		fetches.EachRecord(func(r *kgo.Record) {
 			v.ConsumeRecord(r)
 		})
 
 	}
-	log.Debug("Consume dropping out")
+	log.Debug("Consume %s dropping out", v.config.workerCfg.Name)
 
 	sync_ctx, _ := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	v.client.CommitUncommittedOffsets(sync_ctx)
