@@ -123,6 +123,7 @@ type WorkerStatus struct {
 	Consumed int64         `json:"consumed"`
 	Enqueued int           `json:"enqueued"`
 	Errors   int64         `json:"errors"`
+	Rebuilds int64         `json:"rebuilds"`
 	Latency  LatencyReport `json:"latency"`
 }
 
@@ -136,6 +137,7 @@ func (v *Worker) Status() WorkerStatus {
 		Consumed: v.totalConsumed,
 		Enqueued: len(v.pending),
 		Errors:   v.globalStats.Errors,
+		Rebuilds: v.globalStats.Rebuilds,
 		Latency: LatencyReport{
 			Ack: worker.SummarizeHistogram(&v.globalStats.Ack_latency),
 			E2e: worker.SummarizeHistogram(&v.globalStats.E2e_latency),
@@ -380,16 +382,23 @@ loop:
 		fetches := v.client.PollFetches(v.consumeCtx)
 		log.Debugf("Consume %s fetched %d records", v.config.workerCfg.Name, len(fetches.Records()))
 
+		errored := false
 		fetches.EachError(func(t string, p int32, err error) {
 			// This is non-fatal because it includes e.g. a topic getting
 			// prefix-truncated on retention limits, and thereby getting
 			// a "lost records" on the consumer
 			log.Errorf("Consume %s topic %s partition %d had error: %v", v.config.workerCfg.Name, t, p, err)
+			errored = true
 		})
 
 		if len(fetches.Records()) == 0 && len(fetches.Errors()) == 0 {
 			log.Warnf("Consumed %s got empty fetch result", v.config.workerCfg.Name)
 
+		}
+
+		if errored {
+			log.Errorf("Consume %s resetting because of errors", v.config.workerCfg.Name)
+			go v.Reset()
 		}
 
 		fetches.EachRecord(func(r *kgo.Record) {
@@ -421,6 +430,37 @@ func (v *Worker) Activate() {
 func (v *Worker) Stop() {
 	log.Info("Signalling produce to stop")
 	v.cancelProduce()
+}
+
+func (w *Worker) Rebuild() {
+	w.globalStats.Rebuilds += 1
+
+	log.Infof("Rebuild %s: cancelling", w.config.workerCfg.Name)
+	w.cancelProduce()
+	w.cancelConsume()
+	log.Infof("Rebuild %s: awaiting producer", w.config.workerCfg.Name)
+	w.produceWait.Wait()
+	log.Infof("Rebuild %s: awaiting consumer", w.config.workerCfg.Name)
+	w.consumeWait.Wait()
+
+	// We are destroying client but not the whole Worker,
+	// so the `pending` tokens are retained.
+	w.client.Close()
+
+	// Reset the synchronization objects
+	consumeCtx, cancelConsume := context.WithCancel(context.Background())
+	produceCtx, cancelProduce := context.WithCancel(context.Background())
+	w.consumeCtx = consumeCtx
+	w.cancelConsume = cancelConsume
+	w.produceCtx = produceCtx
+	w.cancelProduce = cancelProduce
+
+	log.Infof("Rebuild %s: constructing fresh client", w.config.workerCfg.Name)
+
+	log.Infof("Rebuild %s: restarting workers", w.config.workerCfg.Name)
+	w.Prepare()
+	w.Activate()
+
 }
 
 func (v *Worker) Wait() worker.Result {
