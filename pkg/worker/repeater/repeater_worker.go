@@ -20,7 +20,7 @@ package loop
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/binary"
 	"fmt"
 	"math/rand"
 	_ "net/http/pprof"
@@ -44,9 +44,8 @@ func newRecord(producerId int, sequence int64) *kgo.Record {
 }
 
 type MessageBody struct {
-	Token   int64     `json:"token"`
-	SentAt  time.Time `json:"sent_at"`
-	Payload []byte    `json:"payload"`
+	Token  int64 `json:"token"`
+	SentAt int64 `json:"sent_at"`
 }
 
 type RepeaterConfig struct {
@@ -229,7 +228,7 @@ func (v *Worker) ConsumeRecord(r *kgo.Record) {
 	log.Debugf("Consume %s got record on partition %d...", v.config.workerCfg.Name, r.Partition)
 
 	message := MessageBody{}
-	err := json.Unmarshal(r.Value, &message)
+	err := binary.Read(bytes.NewReader(r.Value), binary.BigEndian, &message)
 	if err != nil {
 		// This typically happens if the topic was used by other
 		// traffic generators at the same time.
@@ -243,9 +242,9 @@ func (v *Worker) ConsumeRecord(r *kgo.Record) {
 	token := message.Token
 
 	now := time.Now()
-	e2e_latency := now.Sub(message.SentAt)
+	e2e_latency := now.UnixMicro() - message.SentAt
 
-	v.globalStats.E2e_latency.Update(e2e_latency.Microseconds())
+	v.globalStats.E2e_latency.Update(e2e_latency)
 
 	log.Debugf("Consume %s token %06d, total latency %s", v.config.workerCfg.Name, token, e2e_latency)
 	v.pending <- int64(token)
@@ -322,14 +321,15 @@ loop:
 
 		sentAt := time.Now()
 		message := MessageBody{
-			Token:   token,
-			SentAt:  sentAt,
-			Payload: v.payload,
+			Token:  token,
+			SentAt: sentAt.UnixMicro(),
 		}
-		message_bytes, err := json.Marshal(message)
+		var messageBytes bytes.Buffer
+		err := binary.Write(&messageBytes, binary.BigEndian, message)
+		messageBytes.Write(v.payload)
 		util.Chk(err, "Serializing message")
 
-		r = kgo.KeySliceRecord(key.Bytes(), message_bytes)
+		r = kgo.KeySliceRecord(key.Bytes(), messageBytes.Bytes())
 
 		handler := func(r *kgo.Record, err error) {
 			// FIXME: error doesn't necessarily mean the write wasn't committed:
@@ -342,7 +342,7 @@ loop:
 				v.globalStats.Errors += 1
 				v.tokenRevokeCount += 1
 			} else {
-				ackLatency := time.Now().Sub(sentAt)
+				ackLatency := time.Since(sentAt)
 				v.globalStats.Ack_latency.Update(ackLatency.Microseconds())
 				v.totalProduced += 1
 			}
