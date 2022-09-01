@@ -9,6 +9,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"runtime/pprof"
 	"strings"
 	"time"
 
@@ -36,6 +37,7 @@ var (
 	initialDataMb      = flag.Uint64("initial-data-mb", 4, "Initial target data in flight in megabytes")
 	remote             = flag.Bool("remote", false, "Operate in remote-controlled mode")
 	remotePort         = flag.Uint("remote-port", 7884, "Port for report control HTTP listener")
+	profile            = flag.String("profile", "", "Enable CPU profiling")
 )
 
 // NewAdmin returns a franz-go admin client.
@@ -61,6 +63,15 @@ func main() {
 		log.SetLevel(log.DebugLevel)
 	} else {
 		log.SetLevel(log.InfoLevel)
+	}
+
+	if *profile != "" {
+		f, err := os.Create(*profile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
 	}
 
 	log.Info("Getting topic metadata...")
