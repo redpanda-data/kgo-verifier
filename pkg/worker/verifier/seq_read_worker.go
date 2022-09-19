@@ -75,7 +75,7 @@ func (srw *SeqReadWorker) sequentialReadInner(startAt []int64, upTo []int64) ([]
 	complete := make([]bool, srw.config.nPartitions)
 	for i, o := range startAt {
 		partOffsets[int32(i)] = kgo.NewOffset().At(o)
-		log.Infof("Sequential start offset %s/%d %d...", srw.config.workerCfg.Topic, i, partOffsets[int32(i)])
+		log.Infof("Sequential start offset %s/%d  %#v...", srw.config.workerCfg.Topic, i, partOffsets[int32(i)])
 		if o == upTo[i] {
 			complete[i] = true
 		}
