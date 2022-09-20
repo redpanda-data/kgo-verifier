@@ -48,6 +48,7 @@ var (
 	remote             = flag.Bool("remote", false, "Remote control mode, driven by HTTP calls, for use in automated tests")
 	remotePort         = flag.Uint("remote-port", 7884, "HTTP listen port for remote control/query")
 	loop               = flag.Bool("loop", false, "For readers, run indefinitely until stopped via signal or HTTP call")
+	name               = flag.String("client-name", "kgo", "Name of kafka client")
 )
 
 func makeWorkerConfig() worker.WorkerConfig {
@@ -60,6 +61,7 @@ func makeWorkerConfig() worker.WorkerConfig {
 		BatchMaxbytes:      uint(*batchMaxBytes),
 		SaslUser:           *username,
 		SaslPass:           *password,
+		Name:               *name,
 	}
 
 	return c
