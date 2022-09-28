@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
-	"os"
 	"sync"
 	"time"
 
@@ -115,8 +114,7 @@ func (pw *ProducerWorker) produceCheckpoint() {
 
 	data, err := json.Marshal(pw.Status)
 	util.Chk(err, "Status serialization error")
-	os.Stdout.Write(data)
-	os.Stdout.Write([]byte("\n"))
+	log.Infof("Producer status: %s", data)
 }
 
 func (pw *ProducerWorker) Wait() error {
