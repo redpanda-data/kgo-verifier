@@ -3,7 +3,6 @@ package verifier
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
@@ -70,8 +69,11 @@ func (cs *ValidatorStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffse
 }
 
 func (cs *ValidatorStatus) Checkpoint() {
+	log.Infof("Validator status: %s", cs.String())
+}
+
+func (cs *ValidatorStatus) String() string {
 	data, err := json.Marshal(cs)
 	util.Chk(err, "Status serialization error")
-	os.Stdout.Write(data)
-	os.Stdout.Write([]byte("\n"))
+	return string(data)
 }
