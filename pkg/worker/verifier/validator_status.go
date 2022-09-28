@@ -69,7 +69,11 @@ func (cs *ValidatorStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffse
 }
 
 func (cs *ValidatorStatus) Checkpoint() {
+	log.Infof("Validator status: %s", cs.String())
+}
+
+func (cs *ValidatorStatus) String() string {
 	data, err := json.Marshal(cs)
 	util.Chk(err, "Status serialization error")
-	log.Infof("Validator status: %s", data)
+	return string(data)
 }

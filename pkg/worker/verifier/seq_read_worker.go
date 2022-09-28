@@ -66,7 +66,8 @@ func (srw *SeqReadWorker) Wait() error {
 }
 
 func (srw *SeqReadWorker) sequentialReadInner(startAt []int64, upTo []int64) ([]int64, error) {
-	log.Infof("Sequential read...")
+	log.Infof("Sequential read start offsets: %v", startAt)
+	log.Infof("Sequential read end offsets: %v", upTo)
 
 	offsets := make(map[string]map[int32]kgo.Offset)
 	partOffsets := make(map[int32]kgo.Offset, srw.config.nPartitions)
@@ -95,15 +96,20 @@ func (srw *SeqReadWorker) sequentialReadInner(startAt []int64, upTo []int64) ([]
 	last_read := make([]int64, srw.config.nPartitions)
 
 	for {
+		log.Debugf("Calling PollFetches (last_read=%v status %s)", last_read, srw.Status.Validator.String())
 		fetches := client.PollFetches(context.Background())
+		log.Debugf("PollFetches returned %d fetches", len(fetches))
 
 		var r_err error
 		fetches.EachError(func(t string, p int32, err error) {
-			log.Debugf("Sequential fetch %s/%d e=%v...", t, p, err)
+			log.Warnf("Sequential fetch %s/%d e=%v...", t, p, err)
 			r_err = err
 		})
 
 		if r_err != nil {
+			// This is not fatal: server is allowed to return an error, the loop outside
+			// this function will try again, picking up from last_read.
+			log.Warnf("Returning on fetch error %v, read up to %v", r_err, last_read)
 			return last_read, r_err
 		}
 
@@ -132,6 +138,8 @@ func (srw *SeqReadWorker) sequentialReadInner(startAt []int64, upTo []int64) ([]
 			break
 		}
 	}
+
+	log.Infof("Sequential read complete up to %v (validator status %v)", last_read, srw.Status.Validator.String())
 
 	return last_read, nil
 }
