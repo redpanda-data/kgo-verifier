@@ -59,7 +59,7 @@ func (ors *OffsetRanges) Insert(o int64) {
 		if o < last.Upper {
 			// TODO: more flexible structure for out of order inserts, at the moment
 			// we rely on franz-go callbacks being invoked in order.
-			util.Die("Out of order offset %d", o)
+			util.Die("Out of order offset %d (vs %d %d)", o, last.Lower, last.Upper)
 		} else {
 			ors.Ranges = append(ors.Ranges, OffsetRange{Lower: o, Upper: o + 1})
 		}

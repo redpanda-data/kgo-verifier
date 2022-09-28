@@ -185,21 +185,21 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 		pw.Status.Sent += 1
 		var p = rand.Int31n(pw.config.nPartitions)
 
-		expect_offset := nextOffset[p]
+		expectOffset := nextOffset[p]
 		nextOffset[p] += 1
 
-		r := pw.newRecord(0, expect_offset)
+		r := pw.newRecord(0, expectOffset)
 		r.Partition = p
 		wg.Add(1)
 
-		log.Debugf("Writing partition %d at %d", r.Partition, nextOffset[p])
+		log.Debugf("Writing partition %d at %d", r.Partition, expectOffset)
 
 		sentAt := time.Now()
 		handler := func(r *kgo.Record, err error) {
 			concurrent.Release(1)
 			util.Chk(err, "Produce failed: %v", err)
-			if expect_offset != r.Offset {
-				log.Warnf("Produced at unexpected offset %d (expected %d) on partition %d", r.Offset, expect_offset, r.Partition)
+			if expectOffset != r.Offset {
+				log.Warnf("Produced at unexpected offset %d (expected %d) on partition %d", r.Offset, expectOffset, r.Partition)
 				pw.Status.OnBadOffset()
 				bad_offsets <- BadOffset{r.Partition, r.Offset}
 				errored = true
@@ -208,8 +208,8 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 				ackLatency := time.Now().Sub(sentAt)
 				pw.Status.OnAcked()
 				pw.Status.latency.Update(ackLatency.Microseconds())
-				pw.validOffsets.Insert(r.Partition, r.Offset)
 				log.Debugf("Wrote partition %d at %d", r.Partition, r.Offset)
+				pw.validOffsets.Insert(r.Partition, r.Offset)
 			}
 			wg.Done()
 		}
