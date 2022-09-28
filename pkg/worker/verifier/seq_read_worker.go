@@ -53,7 +53,6 @@ func (srw *SeqReadWorker) Wait() error {
 	hwm := GetOffsets(client, srw.config.workerCfg.Topic, srw.config.nPartitions, -1)
 	lwm := make([]int64, srw.config.nPartitions)
 
-	status := NewValidatorStatus()
 	for {
 		var err error
 		lwm, err = srw.sequentialReadInner(lwm, hwm)
@@ -61,7 +60,6 @@ func (srw *SeqReadWorker) Wait() error {
 			log.Warnf("Restarting reader for error %v", err)
 			// Loop around
 		} else {
-			status.Checkpoint()
 			return nil
 		}
 	}
