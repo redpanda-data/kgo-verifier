@@ -49,6 +49,7 @@ var (
 	remotePort         = flag.Uint("remote-port", 7884, "HTTP listen port for remote control/query")
 	loop               = flag.Bool("loop", false, "For readers, run indefinitely until stopped via signal or HTTP call")
 	name               = flag.String("client-name", "kgo", "Name of kafka client")
+	fakeTimestampMs    = flag.Int64("fake-timestamp-ms", -1, "Producer: set artificial batch timestamps on an incrementing basis, starting from this number")
 )
 
 func makeWorkerConfig() worker.WorkerConfig {
@@ -155,7 +156,7 @@ func main() {
 
 	if *pCount > 0 {
 		log.Info("Starting producer...")
-		pwc := verifier.NewProducerConfig(makeWorkerConfig(), "producer", nPartitions, *mSize, *pCount)
+		pwc := verifier.NewProducerConfig(makeWorkerConfig(), "producer", nPartitions, *mSize, *pCount, *fakeTimestampMs)
 		pw := verifier.NewProducerWorker(pwc)
 		workers = append(workers, &pw)
 		waitErr := pw.Wait()

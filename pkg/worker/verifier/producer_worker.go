@@ -18,35 +18,39 @@ import (
 )
 
 type ProducerConfig struct {
-	workerCfg    worker.WorkerConfig
-	name         string
-	nPartitions  int32
-	messageSize  int
-	messageCount int
+	workerCfg       worker.WorkerConfig
+	name            string
+	nPartitions     int32
+	messageSize     int
+	messageCount    int
+	fakeTimestampMs int64
 }
 
 func NewProducerConfig(wc worker.WorkerConfig, name string, nPartitions int32,
-	messageSize int, messageCount int) ProducerConfig {
+	messageSize int, messageCount int, fakeTimestampMs int64) ProducerConfig {
 	return ProducerConfig{
-		workerCfg:    wc,
-		name:         name,
-		nPartitions:  nPartitions,
-		messageCount: messageCount,
-		messageSize:  messageSize,
+		workerCfg:       wc,
+		name:            name,
+		nPartitions:     nPartitions,
+		messageCount:    messageCount,
+		messageSize:     messageSize,
+		fakeTimestampMs: fakeTimestampMs,
 	}
 }
 
 type ProducerWorker struct {
-	config       ProducerConfig
-	Status       ProducerWorkerStatus
-	validOffsets TopicOffsetRanges
+	config          ProducerConfig
+	Status          ProducerWorkerStatus
+	validOffsets    TopicOffsetRanges
+	fakeTimestampMs int64
 }
 
 func NewProducerWorker(cfg ProducerConfig) ProducerWorker {
 	return ProducerWorker{
-		config:       cfg,
-		Status:       NewProducerWorkerStatus(),
-		validOffsets: LoadTopicOffsetRanges(cfg.workerCfg.Topic, cfg.nPartitions),
+		config:          cfg,
+		Status:          NewProducerWorkerStatus(),
+		validOffsets:    LoadTopicOffsetRanges(cfg.workerCfg.Topic, cfg.nPartitions),
+		fakeTimestampMs: cfg.fakeTimestampMs,
 	}
 }
 
@@ -56,8 +60,12 @@ func (pw *ProducerWorker) newRecord(producerId int, sequence int64) *kgo.Record 
 
 	payload := make([]byte, pw.config.messageSize)
 
-	var r *kgo.Record
-	r = kgo.KeySliceRecord(key.Bytes(), payload)
+	var r *kgo.Record = kgo.KeySliceRecord(key.Bytes(), payload)
+
+	if pw.fakeTimestampMs != -1 {
+		r.Timestamp = time.Unix(0, pw.fakeTimestampMs*1000000)
+		pw.fakeTimestampMs += 1
+	}
 	return r
 }
 
