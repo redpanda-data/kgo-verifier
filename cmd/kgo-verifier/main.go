@@ -50,6 +50,10 @@ var (
 	loop               = flag.Bool("loop", false, "For readers, run indefinitely until stopped via signal or HTTP call")
 	name               = flag.String("client-name", "kgo", "Name of kafka client")
 	fakeTimestampMs    = flag.Int64("fake-timestamp-ms", -1, "Producer: set artificial batch timestamps on an incrementing basis, starting from this number")
+
+	useTransactions      = flag.Bool("use-transactions", false, "Producer: use a transactional producer")
+	transactionAbortRate = flag.Float64("transaction-abort-rate", 0.0, "The probability that any given transaction should abort")
+	msgsPerTransaction   = flag.Uint("msgs-per-transaction", 1, "The number of messages that should be in a given transaction")
 )
 
 func makeWorkerConfig() worker.WorkerConfig {
@@ -158,6 +162,12 @@ func main() {
 		log.Info("Starting producer...")
 		pwc := verifier.NewProducerConfig(makeWorkerConfig(), "producer", nPartitions, *mSize, *pCount, *fakeTimestampMs)
 		pw := verifier.NewProducerWorker(pwc)
+
+		if *useTransactions {
+			tconfig := worker.NewTransactionSTMConfig(*transactionAbortRate, *msgsPerTransaction)
+			pw.EnableTransactions(tconfig)
+		}
+
 		workers = append(workers, &pw)
 		waitErr := pw.Wait()
 		util.Chk(err, "Producer error: %v", waitErr)

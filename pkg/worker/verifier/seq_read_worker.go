@@ -86,6 +86,13 @@ func (srw *SeqReadWorker) sequentialReadInner(startAt []int64, upTo []int64) ([]
 	opts := srw.config.workerCfg.MakeKgoOpts()
 	opts = append(opts, []kgo.Opt{
 		kgo.ConsumePartitions(offsets),
+		// By default control records are dropped by kgo.
+		// This can cause SeqReadWorker to indefinitely hang on
+		// PollFetches if control records are at the end of a
+		// partition's log. Since SeqReadWorker will never
+		// see a message at a log's HWM if kgo drops the
+		// control records.
+		kgo.KeepControlRecords(),
 	}...)
 	client, err := kgo.NewClient(opts...)
 	if err != nil {

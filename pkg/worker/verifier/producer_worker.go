@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/rcrowley/go-metrics"
 	"github.com/redpanda-data/kgo-verifier/pkg/util"
 	worker "github.com/redpanda-data/kgo-verifier/pkg/worker"
@@ -43,6 +44,11 @@ type ProducerWorker struct {
 	Status          ProducerWorkerStatus
 	validOffsets    TopicOffsetRanges
 	fakeTimestampMs int64
+
+	// Used for enabling transactional produces
+	transactionsEnabled  bool
+	transactionSTMConfig worker.TransactionSTMConfig
+	transactionSTM       *worker.TransactionSTM
 }
 
 func NewProducerWorker(cfg ProducerConfig) ProducerWorker {
@@ -54,9 +60,22 @@ func NewProducerWorker(cfg ProducerConfig) ProducerWorker {
 	}
 }
 
+func (v *ProducerWorker) EnableTransactions(config worker.TransactionSTMConfig) {
+	v.transactionSTMConfig = config
+	v.transactionsEnabled = true
+}
+
 func (pw *ProducerWorker) newRecord(producerId int, sequence int64) *kgo.Record {
 	var key bytes.Buffer
-	fmt.Fprintf(&key, "%06d.%018d", producerId, sequence)
+
+	if !pw.transactionsEnabled || !pw.transactionSTM.InAbortedTransaction() {
+		fmt.Fprintf(&key, "%06d.%018d", producerId, sequence)
+	} else {
+		// This message ensures that `ValidatorStatus.ValidateRecord`
+		// will report it as an invalid read if it's consumed. This is
+		// since messages in aborted transactions should never be read.
+		fmt.Fprintf(&key, "ABORTED MSG: %06d.%018d", producerId, sequence)
+	}
 
 	payload := make([]byte, pw.config.messageSize)
 
@@ -83,6 +102,10 @@ type ProducerWorkerStatus struct {
 
 	// How many times did we restart the producer loop?
 	Restarts int64 `json:"restarts"`
+
+	// How many failures occured while trying to begin, abort,
+	// or commit a transaction.
+	FailedTransactions int64 `json:"failed_transactions"`
 
 	// Ack latency: a private histogram for the data,
 	// and a public summary for JSON output
@@ -164,10 +187,26 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 		kgo.RequiredAcks(kgo.AllISRAcks()),
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
 	}...)
+
+	if pw.transactionsEnabled {
+		randId := uuid.New()
+		tid := "p" + randId.String()
+		log.Debugf("Configuring transactions with TransactionalID %s", tid)
+
+		opts = append(opts, []kgo.Opt{
+			kgo.TransactionalID(tid),
+			kgo.TransactionTimeout(2 * time.Minute),
+		}...)
+	}
+
 	client, err := kgo.NewClient(opts...)
 	if err != nil {
 		log.Errorf("Error creating Kafka client: %v", err)
 		return 0, nil, err
+	}
+
+	if pw.transactionsEnabled {
+		pw.transactionSTM = worker.NewTransactionSTM(context.Background(), client, pw.transactionSTMConfig)
 	}
 
 	nextOffset := GetOffsets(client, pw.config.workerCfg.Topic, pw.config.nPartitions, -1)
@@ -192,6 +231,22 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 		produced += 1
 		pw.Status.Sent += 1
 		var p = rand.Int31n(pw.config.nPartitions)
+
+		if pw.transactionsEnabled {
+			addedControlMarkers, err := pw.transactionSTM.BeforeMessageSent()
+			if err != nil {
+				log.Errorf("Transaction error %v", err)
+				errored = true
+				pw.Status.FailedTransactions += 1
+				break
+			}
+
+			if addedControlMarkers > 0 {
+				for i, _ := range nextOffset {
+					nextOffset[i] += addedControlMarkers
+				}
+			}
+		}
 
 		expectOffset := nextOffset[p]
 		nextOffset[p] += 1
@@ -232,6 +287,14 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 		}
 	}
 
+	if pw.transactionsEnabled {
+		if err := pw.transactionSTM.TryEndTransaction(); err != nil {
+			log.Errorf("unable to end transaction: %v", err)
+			errored = true
+			pw.Status.FailedTransactions += 1
+		}
+	}
+
 	log.Info("Waiting...")
 	wg.Wait()
 	log.Info("Waited.")
@@ -246,8 +309,8 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 		for o := range bad_offsets {
 			r = append(r, o)
 		}
-		if len(r) == 0 {
-			util.Die("No bad offsets but errored?")
+		if len(r) == 0 && pw.Status.FailedTransactions == 0 {
+			util.Die("No bad offsets or failed transactions but errored?")
 		}
 		successful_produced := produced - int64(len(r))
 		return successful_produced, r, nil
