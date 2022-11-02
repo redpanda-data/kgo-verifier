@@ -38,6 +38,10 @@ var (
 	remote             = flag.Bool("remote", false, "Operate in remote-controlled mode")
 	remotePort         = flag.Uint("remote-port", 7884, "Port for report control HTTP listener")
 	profile            = flag.String("profile", "", "Enable CPU profiling")
+
+	useTransactions      = flag.Bool("use-transactions", false, "Producer: use a transactional producer")
+	transactionAbortRate = flag.Float64("transaction-abort-rate", 0.0, "The probability that any given transaction should abort")
+	msgsPerTransaction   = flag.Uint("msgs-per-transaction", 1, "The number of messages that should be in a given transaction")
 )
 
 // NewAdmin returns a franz-go admin client.
@@ -123,6 +127,10 @@ func main() {
 		)
 		config := repeater.NewRepeaterConfig(wConfig, *group, partitions, *keys, *payloadSize, dataInFlightPerWorker)
 		lv := repeater.NewWorker(config)
+		if *useTransactions {
+			tconfig := worker.NewTransactionSTMConfig(*transactionAbortRate, *msgsPerTransaction)
+			lv.EnableTransactions(tconfig)
+		}
 		lv.Prepare()
 		verifiers = append(verifiers, &lv)
 	}

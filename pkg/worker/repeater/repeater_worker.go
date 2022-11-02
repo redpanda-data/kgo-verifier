@@ -27,6 +27,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 	"github.com/twmb/franz-go/pkg/kgo"
 
@@ -44,8 +45,9 @@ func newRecord(producerId int, sequence int64) *kgo.Record {
 }
 
 type MessageBody struct {
-	Token  int64 `json:"token"`
-	SentAt int64 `json:"sent_at"`
+	Token   int64 `json:"token"`
+	SentAt  int64 `json:"sent_at"`
+	Aborted bool  `json:"aborted"`
 }
 
 type RepeaterConfig struct {
@@ -109,7 +111,13 @@ type Worker struct {
 	produceWait sync.WaitGroup
 	consumeWait sync.WaitGroup
 
-	client *kgo.Client
+	client         *kgo.Client
+	producerClient *kgo.Client
+
+	// Used for enabling transactional produces
+	transactionsEnabled  bool
+	transactionSTMConfig worker.TransactionSTMConfig
+	transactionSTM       *worker.TransactionSTM
 }
 
 type LatencyReport struct {
@@ -219,6 +227,11 @@ func NewWorker(config RepeaterConfig) Worker {
 	return v
 }
 
+func (v *Worker) EnableTransactions(config worker.TransactionSTMConfig) {
+	v.transactionSTMConfig = config
+	v.transactionsEnabled = true
+}
+
 func (v *Worker) ConsumeRecord(r *kgo.Record) {
 	v.lock.Lock()
 	defer v.lock.Unlock()
@@ -239,6 +252,13 @@ func (v *Worker) ConsumeRecord(r *kgo.Record) {
 		return
 	}
 
+	if message.Aborted {
+		log.Errorf("Worker %s consumed a message from an aborted record from %s.%d offset %d: %v",
+			v.config.workerCfg.Name, r.Topic, r.Partition, r.Offset, message)
+		v.globalStats.Errors += 1
+		return
+	}
+
 	token := message.Token
 
 	now := time.Now()
@@ -251,28 +271,70 @@ func (v *Worker) ConsumeRecord(r *kgo.Record) {
 }
 
 func (v *Worker) Init() {
-	opts := v.config.workerCfg.MakeKgoOpts()
+	{
+		opts := v.config.workerCfg.MakeKgoOpts()
 
-	opts = append(opts, []kgo.Opt{
-		kgo.ConsumeTopics(v.config.workerCfg.Topic),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtEnd()),
-		kgo.ProducerBatchMaxBytes(1024 * 1024),
-		kgo.ProducerBatchCompression(kgo.NoCompression()),
-		kgo.RecordPartitioner(kgo.StickyKeyPartitioner(nil)),
-		kgo.ConsumerGroup(v.config.Group),
-	}...)
+		opts = append(opts, []kgo.Opt{
+			kgo.ConsumeTopics(v.config.workerCfg.Topic),
+			kgo.ConsumeResetOffset(kgo.NewOffset().AtEnd()),
+			kgo.ProducerBatchMaxBytes(1024 * 1024),
+			kgo.RecordPartitioner(kgo.StickyKeyPartitioner(nil)),
+			kgo.ConsumerGroup(v.config.Group),
+		}...)
 
-	if v.config.Group != "" {
-		opts = append(opts, kgo.ConsumerGroup(v.config.Group))
+		if v.transactionsEnabled {
+			opts = append(opts, []kgo.Opt{
+				// By default kgo reads uncommited records and unstable offsets
+				kgo.RequireStableFetchOffsets(),
+				kgo.FetchIsolationLevel(kgo.ReadCommitted()),
+			}...)
+		}
+
+		if v.config.Group != "" {
+			opts = append(opts, kgo.ConsumerGroup(v.config.Group))
+		}
+
+		client, err := kgo.NewClient(opts...)
+		util.Chk(err, "unable to initialize client: %v", err)
+		v.client = client
 	}
 
-	client, err := kgo.NewClient(opts...)
-	util.Chk(err, "unable to initialize client: %v", err)
-	v.client = client
+	// Using separate produce/consumer clients since when
+	// transactions are enabled begin/end can't concurrently
+	// be called with `PollFetches` from the same client
+	{
+		opts := v.config.workerCfg.MakeKgoOpts()
+
+		opts = append(opts, []kgo.Opt{
+			kgo.ProducerBatchMaxBytes(1024 * 1024),
+			kgo.ProducerBatchCompression(kgo.NoCompression()),
+			kgo.RecordPartitioner(kgo.StickyKeyPartitioner(nil)),
+		}...)
+
+		if v.transactionsEnabled {
+			randId := uuid.New()
+			tid := "p" + randId.String()
+			log.Debugf("Configuring transactions with TransactionalID %s", tid)
+
+			opts = append(opts, []kgo.Opt{
+				kgo.TransactionalID(tid),
+				kgo.TransactionTimeout(2 * time.Minute),
+			}...)
+		}
+
+		producerClient, err := kgo.NewClient(opts...)
+		util.Chk(err, "unable to initialize client: %v", err)
+		v.producerClient = producerClient
+	}
+
+	if v.transactionsEnabled {
+		v.transactionSTM = worker.NewTransactionSTM(v.produceCtx, v.producerClient, v.transactionSTMConfig)
+	}
 }
 
 func (v *Worker) Shutdown() {
 	v.client.Close()
+	v.producerClient.Close()
 }
 
 func waitTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
@@ -306,12 +368,36 @@ loop:
 			break loop
 		case token = <-v.pending:
 			log.Debugf("Produce %s sending token %d", v.config.workerCfg.Name, token)
+		case <-time.After(10 * time.Second):
+			if v.transactionsEnabled {
+				log.Errorf("Produce %s timeout while waiting for tokens; trying to end transaction early", v.config.workerCfg.Name)
+				if err := v.transactionSTM.TryEndTransaction(); err != nil {
+					log.Errorf("Produce error; transaction failure: %v", err)
+					break loop
+				}
+			}
+			continue
+		}
+
+		if v.transactionsEnabled {
+			if _, err := v.transactionSTM.BeforeMessageSent(); err != nil {
+				log.Errorf("Produce error; transaction failure: %v", err)
+				break loop
+			}
+
+			// Recyle the token as it's not going to be consumed.
+			// TODO: Should we be holding all tokens in an aborted transaction
+			// until it's aborted? Then releasing them afterwards.
+			if v.transactionSTM.InAbortedTransaction() {
+				v.pending <- token
+			}
 		}
 
 		var maxKey uint64
 		if v.config.KeySpace.UniqueCount > 0 {
 			maxKey = v.config.KeySpace.UniqueCount
 		} else {
+
 			maxKey = ^uint64(0)
 		}
 		var key bytes.Buffer
@@ -319,10 +405,18 @@ loop:
 
 		var r *kgo.Record
 
+		var aborted bool
+		if v.transactionsEnabled {
+			aborted = v.transactionSTM.InAbortedTransaction()
+		} else {
+			aborted = false
+		}
+
 		sentAt := time.Now()
 		message := MessageBody{
-			Token:  token,
-			SentAt: sentAt.UnixMicro(),
+			Token:   token,
+			SentAt:  sentAt.UnixMicro(),
+			Aborted: aborted,
 		}
 		var messageBytes bytes.Buffer
 		err := binary.Write(&messageBytes, binary.BigEndian, message)
@@ -350,13 +444,13 @@ loop:
 		}
 
 		ackWait.Add(1)
-		v.client.Produce(v.produceCtx, r, handler)
+		v.producerClient.Produce(v.produceCtx, r, handler)
 	}
 
 	log.Infof("Produce shutdown: flushing")
 	flushCtx, flushCtxCancel := context.WithTimeout(context.Background(), time.Duration(time.Millisecond*1000))
 	defer flushCtxCancel()
-	v.client.Flush(flushCtx)
+	v.producerClient.Flush(flushCtx)
 	log.Infof("Produce shutdown: waiting")
 	waitTimeout(&ackWait, time.Duration(time.Millisecond*1000))
 	log.Infof("Produce shutdown: complete")
