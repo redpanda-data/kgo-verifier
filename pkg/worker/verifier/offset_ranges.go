@@ -14,6 +14,7 @@ func LoadTopicOffsetRanges(topic string, nPartitions int32) TopicOffsetRanges {
 	data, err := ioutil.ReadFile(topicOffsetRangeFile(topic))
 	if err != nil {
 		// Pass, assume it's not existing yet
+		log.Warnf("Can't read topic offset ranges: %v", err)
 		return NewTopicOffsetRanges(topic, nPartitions)
 	} else {
 		var tors TopicOffsetRanges
