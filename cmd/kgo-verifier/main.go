@@ -236,8 +236,14 @@ func main() {
 				makeWorkerConfig(), "groupReader", nPartitions, *cgReaders,
 				*seqConsumeCount, (*consumeTputMb)*1024*1024))
 		workers = append(workers, &grw)
-		waitErr := grw.Wait()
-		util.Chk(waitErr, "Consumer error: %v", err)
+
+		firstPass := true
+		for firstPass || (len(lastPassChan) == 0 && *loop) {
+			log.Info("Starting group read pass")
+			firstPass = false
+			waitErr := grw.Wait()
+			util.Chk(waitErr, "Consumer error: %v", err)
+		}
 	}
 
 	if *remote {
