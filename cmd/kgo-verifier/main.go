@@ -51,6 +51,7 @@ var (
 	loop               = flag.Bool("loop", false, "For readers, run indefinitely until stopped via signal or HTTP call")
 	name               = flag.String("client-name", "kgo", "Name of kafka client")
 	fakeTimestampMs    = flag.Int64("fake-timestamp-ms", -1, "Producer: set artificial batch timestamps on an incrementing basis, starting from this number")
+	consumeTputMb      = flag.Int("consume-throughput-mb", -1, "Seq/group consumer: set max throughput in mb/s")
 
 	useTransactions      = flag.Bool("use-transactions", false, "Producer: use a transactional producer")
 	transactionAbortRate = flag.Float64("transaction-abort-rate", 0.0, "The probability that any given transaction should abort")
@@ -178,6 +179,7 @@ func main() {
 	if *seqRead {
 		srw := verifier.NewSeqReadWorker(verifier.NewSeqReadConfig(
 			makeWorkerConfig(), "sequential", nPartitions, *seqConsumeCount,
+			(*consumeTputMb)*1024*1024,
 		))
 		workers = append(workers, &srw)
 
@@ -228,8 +230,9 @@ func main() {
 
 	if *cgReaders > 0 {
 		grw := verifier.NewGroupReadWorker(
-			verifier.NewGroupReadConfig(makeWorkerConfig(), "groupReader", nPartitions, *cgReaders,
-				*seqConsumeCount))
+			verifier.NewGroupReadConfig(
+				makeWorkerConfig(), "groupReader", nPartitions, *cgReaders,
+				*seqConsumeCount, (*consumeTputMb)*1024*1024))
 		workers = append(workers, &grw)
 		waitErr := grw.Wait()
 		util.Chk(waitErr, "Consumer error: %v", err)

@@ -10,24 +10,28 @@ import (
 	worker "github.com/redpanda-data/kgo-verifier/pkg/worker"
 	log "github.com/sirupsen/logrus"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"golang.org/x/time/rate"
 )
 
 type GroupReadConfig struct {
-	workerCfg    worker.WorkerConfig
-	name         string
-	nPartitions  int32
-	nReaders     int
-	maxReadCount int
+	workerCfg      worker.WorkerConfig
+	name           string
+	nPartitions    int32
+	nReaders       int
+	maxReadCount   int
+	rateLimitBytes int
 }
 
 func NewGroupReadConfig(
-	wc worker.WorkerConfig, name string, nPartitions int32, nReaders int, maxReadCount int) GroupReadConfig {
+	wc worker.WorkerConfig, name string, nPartitions int32, nReaders int,
+	maxReadCount int, rateLimitBytes int) GroupReadConfig {
 	return GroupReadConfig{
-		workerCfg:    wc,
-		name:         name,
-		nPartitions:  nPartitions,
-		nReaders:     nReaders,
-		maxReadCount: maxReadCount,
+		workerCfg:      wc,
+		name:           name,
+		nPartitions:    nPartitions,
+		nReaders:       nReaders,
+		maxReadCount:   maxReadCount,
+		rateLimitBytes: rateLimitBytes,
 	}
 }
 
@@ -63,23 +67,38 @@ type ConsumerGroupOffsets struct {
 	curReadCount int
 	// max number of messages to consume
 	maxReadCount int
+	// rate limiter
+	rlimiter *rate.Limiter
 }
 
-func NewConsumerGroupOffsets(hwms []int64, maxReadCount int, cancelFunc context.CancelFunc) ConsumerGroupOffsets {
+func NewConsumerGroupOffsets(
+	hwms []int64,
+	maxReadCount int,
+	rateLimitBytes int,
+	cancelFunc context.CancelFunc) ConsumerGroupOffsets {
 	lastSeen := make([]int64, len(hwms))
 	upTo := make([]int64, len(hwms))
 	copy(upTo, hwms)
+	var rlimiter *rate.Limiter
+	if rateLimitBytes > 0 {
+		rlimiter = rate.NewLimiter(rate.Limit(rateLimitBytes), rateLimitBytes)
+	}
 	return ConsumerGroupOffsets{
 		cancelFunc:   cancelFunc,
 		lastSeen:     lastSeen,
 		upTo:         upTo,
 		maxReadCount: maxReadCount,
+		rlimiter:     rlimiter,
 	}
 }
 
-func (cgs *ConsumerGroupOffsets) AddRecord(r *kgo.Record) {
+func (cgs *ConsumerGroupOffsets) AddRecord(ctx context.Context, r *kgo.Record) {
 	cgs.lock.Lock()
 	defer cgs.lock.Unlock()
+
+	if cgs.rlimiter != nil {
+		cgs.rlimiter.WaitN(ctx, len(r.Value))
+	}
 
 	cgs.curReadCount += 1
 
@@ -138,7 +157,8 @@ func (grw *GroupReadWorker) Wait() error {
 
 	status := NewValidatorStatus()
 	ctx, cancelFunc := context.WithCancel(context.Background())
-	cgOffsets := NewConsumerGroupOffsets(hwms, grw.config.maxReadCount, cancelFunc)
+	cgOffsets := NewConsumerGroupOffsets(
+		hwms, grw.config.maxReadCount, grw.config.rateLimitBytes, cancelFunc)
 
 	var wg sync.WaitGroup
 	for i := 0; i < int(grw.config.nReaders); i++ {
@@ -176,6 +196,11 @@ func (grw *GroupReadWorker) consumerGroupReadInner(
 		kgo.ConsumeTopics(grw.config.workerCfg.Topic),
 		kgo.ConsumerGroup(groupName),
 	}...)
+	if grw.config.rateLimitBytes > 0 {
+		// reduce batch size for smoother rate limiting
+		opts = append(opts,
+			kgo.FetchMaxBytes(int32(grw.config.rateLimitBytes/grw.config.nReaders/10)))
+	}
 	client, err := kgo.NewClient(opts...)
 	if err != nil {
 		// Our caller can retry us.
@@ -212,7 +237,7 @@ func (grw *GroupReadWorker) consumerGroupReadInner(
 				fiberId, grw.config.workerCfg.Topic, r.Partition, r.Offset)
 			grw.Status.Validator.ValidateRecord(r, &validRanges)
 			// Will cancel the context if we have read everything
-			cgOffsets.AddRecord(r)
+			cgOffsets.AddRecord(ctx, r)
 		})
 
 		// Offsets will be committed on the next PollFetches invocation

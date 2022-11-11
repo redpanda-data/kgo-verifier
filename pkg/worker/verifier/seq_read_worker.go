@@ -6,22 +6,26 @@ import (
 	worker "github.com/redpanda-data/kgo-verifier/pkg/worker"
 	log "github.com/sirupsen/logrus"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"golang.org/x/time/rate"
 )
 
 type SeqReadConfig struct {
-	workerCfg    worker.WorkerConfig
-	name         string
-	nPartitions  int32
-	maxReadCount int
+	workerCfg      worker.WorkerConfig
+	name           string
+	nPartitions    int32
+	maxReadCount   int
+	rateLimitBytes int
 }
 
 func NewSeqReadConfig(
-	wc worker.WorkerConfig, name string, nPartitions int32, maxReadCount int) SeqReadConfig {
+	wc worker.WorkerConfig, name string, nPartitions int32,
+	maxReadCount int, rateLimitBytes int) SeqReadConfig {
 	return SeqReadConfig{
-		workerCfg:    wc,
-		name:         name,
-		nPartitions:  nPartitions,
-		maxReadCount: maxReadCount,
+		workerCfg:      wc,
+		name:           name,
+		nPartitions:    nPartitions,
+		maxReadCount:   maxReadCount,
+		rateLimitBytes: rateLimitBytes,
 	}
 }
 
@@ -98,6 +102,10 @@ func (srw *SeqReadWorker) sequentialReadInner(startAt []int64, upTo []int64) ([]
 		// control records.
 		kgo.KeepControlRecords(),
 	}...)
+	if srw.config.rateLimitBytes > 0 {
+		// reduce batch size for smoother rate limiting
+		opts = append(opts, kgo.FetchMaxBytes(int32(srw.config.rateLimitBytes/10)))
+	}
 	client, err := kgo.NewClient(opts...)
 	if err != nil {
 		log.Errorf("Error creating Kafka client: %v", err)
@@ -105,6 +113,10 @@ func (srw *SeqReadWorker) sequentialReadInner(startAt []int64, upTo []int64) ([]
 	}
 
 	curReadCount := 0
+	var rlimiter *rate.Limiter
+	if srw.config.rateLimitBytes > 0 {
+		rlimiter = rate.NewLimiter(rate.Limit(srw.config.rateLimitBytes), srw.config.rateLimitBytes)
+	}
 	last_read := make([]int64, srw.config.nPartitions)
 
 	for {
@@ -126,6 +138,10 @@ func (srw *SeqReadWorker) sequentialReadInner(startAt []int64, upTo []int64) ([]
 		}
 
 		fetches.EachRecord(func(r *kgo.Record) {
+			if rlimiter != nil {
+				rlimiter.WaitN(context.Background(), len(r.Value))
+			}
+
 			log.Debugf("Sequential read %s/%d o=%d...", srw.config.workerCfg.Topic, r.Partition, r.Offset)
 			curReadCount += 1
 			if r.Offset > last_read[r.Partition] {
