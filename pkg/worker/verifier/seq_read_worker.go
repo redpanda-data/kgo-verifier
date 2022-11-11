@@ -52,6 +52,7 @@ func (srw *SeqReadWorker) Wait() error {
 
 	hwm := GetOffsets(client, srw.config.workerCfg.Topic, srw.config.nPartitions, -1)
 	lwm := make([]int64, srw.config.nPartitions)
+	client.Close()
 
 	for {
 		var err error
@@ -147,6 +148,7 @@ func (srw *SeqReadWorker) sequentialReadInner(startAt []int64, upTo []int64) ([]
 	}
 
 	log.Infof("Sequential read complete up to %v (validator status %v)", last_read, srw.Status.Validator.String())
+	client.Close()
 
 	return last_read, nil
 }
