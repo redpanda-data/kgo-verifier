@@ -155,7 +155,6 @@ func (grw *GroupReadWorker) Wait() error {
 	groupName := fmt.Sprintf("kgo-verifier-%d-%d", time.Now().Unix(), os.Getpid())
 	log.Infof("Reading with consumer group %s", groupName)
 
-	status := NewValidatorStatus()
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	cgOffsets := NewConsumerGroupOffsets(
 		hwms, grw.config.maxReadCount, grw.config.rateLimitBytes, cancelFunc)
@@ -182,7 +181,7 @@ func (grw *GroupReadWorker) Wait() error {
 	}
 
 	wg.Wait()
-	status.Checkpoint()
+	grw.Status.Validator.Checkpoint()
 	return nil
 }
 
