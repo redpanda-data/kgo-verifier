@@ -13,18 +13,21 @@ import (
 )
 
 type GroupReadConfig struct {
-	workerCfg   worker.WorkerConfig
-	name        string
-	nPartitions int32
-	nReaders    int
+	workerCfg    worker.WorkerConfig
+	name         string
+	nPartitions  int32
+	nReaders     int
+	maxReadCount int
 }
 
-func NewGroupReadConfig(wc worker.WorkerConfig, name string, nPartitions int32, nReaders int) GroupReadConfig {
+func NewGroupReadConfig(
+	wc worker.WorkerConfig, name string, nPartitions int32, nReaders int, maxReadCount int) GroupReadConfig {
 	return GroupReadConfig{
-		workerCfg:   wc,
-		name:        name,
-		nPartitions: nPartitions,
-		nReaders:    nReaders,
+		workerCfg:    wc,
+		name:         name,
+		nPartitions:  nPartitions,
+		nReaders:     nReaders,
+		maxReadCount: maxReadCount,
 	}
 }
 
@@ -56,16 +59,21 @@ type ConsumerGroupOffsets struct {
 	lastSeen []int64
 	// Partition id -> max offset that we intend to read (exclusive)
 	upTo []int64
+	// number of currently consumed messages
+	curReadCount int
+	// max number of messages to consume
+	maxReadCount int
 }
 
-func NewConsumerGroupOffsets(hwms []int64, cancelFunc context.CancelFunc) ConsumerGroupOffsets {
+func NewConsumerGroupOffsets(hwms []int64, maxReadCount int, cancelFunc context.CancelFunc) ConsumerGroupOffsets {
 	lastSeen := make([]int64, len(hwms))
 	upTo := make([]int64, len(hwms))
 	copy(upTo, hwms)
 	return ConsumerGroupOffsets{
-		cancelFunc: cancelFunc,
-		lastSeen:   lastSeen,
-		upTo:       upTo,
+		cancelFunc:   cancelFunc,
+		lastSeen:     lastSeen,
+		upTo:         upTo,
+		maxReadCount: maxReadCount,
 	}
 }
 
@@ -73,8 +81,15 @@ func (cgs *ConsumerGroupOffsets) AddRecord(r *kgo.Record) {
 	cgs.lock.Lock()
 	defer cgs.lock.Unlock()
 
+	cgs.curReadCount += 1
+
 	if r.Offset > cgs.lastSeen[r.Partition] {
 		cgs.lastSeen[r.Partition] = r.Offset
+	}
+
+	if cgs.maxReadCount >= 0 && cgs.curReadCount >= cgs.maxReadCount {
+		cgs.cancelFunc()
+		return
 	}
 
 	if cgs.lastSeen[r.Partition] >= cgs.upTo[r.Partition]-1 {
@@ -123,7 +138,7 @@ func (grw *GroupReadWorker) Wait() error {
 
 	status := NewValidatorStatus()
 	ctx, cancelFunc := context.WithCancel(context.Background())
-	cgOffsets := NewConsumerGroupOffsets(hwms, cancelFunc)
+	cgOffsets := NewConsumerGroupOffsets(hwms, grw.config.maxReadCount, cancelFunc)
 
 	var wg sync.WaitGroup
 	for i := 0; i < int(grw.config.nReaders); i++ {

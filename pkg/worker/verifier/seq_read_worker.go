@@ -9,16 +9,19 @@ import (
 )
 
 type SeqReadConfig struct {
-	workerCfg   worker.WorkerConfig
-	name        string
-	nPartitions int32
+	workerCfg    worker.WorkerConfig
+	name         string
+	nPartitions  int32
+	maxReadCount int
 }
 
-func NewSeqReadConfig(wc worker.WorkerConfig, name string, nPartitions int32) SeqReadConfig {
+func NewSeqReadConfig(
+	wc worker.WorkerConfig, name string, nPartitions int32, maxReadCount int) SeqReadConfig {
 	return SeqReadConfig{
-		workerCfg:   wc,
-		name:        name,
-		nPartitions: nPartitions,
+		workerCfg:    wc,
+		name:         name,
+		nPartitions:  nPartitions,
+		maxReadCount: maxReadCount,
 	}
 }
 
@@ -101,6 +104,7 @@ func (srw *SeqReadWorker) sequentialReadInner(startAt []int64, upTo []int64) ([]
 		return nil, err
 	}
 
+	curReadCount := 0
 	last_read := make([]int64, srw.config.nPartitions)
 
 	for {
@@ -123,6 +127,7 @@ func (srw *SeqReadWorker) sequentialReadInner(startAt []int64, upTo []int64) ([]
 
 		fetches.EachRecord(func(r *kgo.Record) {
 			log.Debugf("Sequential read %s/%d o=%d...", srw.config.workerCfg.Topic, r.Partition, r.Offset)
+			curReadCount += 1
 			if r.Offset > last_read[r.Partition] {
 				last_read[r.Partition] = r.Offset
 			}
@@ -133,6 +138,10 @@ func (srw *SeqReadWorker) sequentialReadInner(startAt []int64, upTo []int64) ([]
 
 			srw.Status.Validator.ValidateRecord(r, &validRanges)
 		})
+
+		if srw.config.maxReadCount >= 0 && curReadCount >= srw.config.maxReadCount {
+			break
+		}
 
 		any_incomplete := false
 		for _, c := range complete {

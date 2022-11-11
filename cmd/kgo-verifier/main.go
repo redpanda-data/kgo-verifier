@@ -41,6 +41,7 @@ var (
 	cCount             = flag.Int("rand_read_msgs", 0, "Number of validation reads to do from each random reader")
 	seqRead            = flag.Bool("seq_read", false, "Whether to do sequential read validation")
 	parallelRead       = flag.Int("parallel", 1, "How many readers to run in parallel")
+	seqConsumeCount    = flag.Int("seq_read_msgs", -1, "Seq/group consumer: set max number of records to consume")
 	batchMaxBytes      = flag.Int("batch_max_bytes", 1048576, "the maximum batch size to allow per-partition (must be less than Kafka's max.message.bytes, producing)")
 	cgReaders          = flag.Int("consumer_group_readers", 0, "Number of parallel readers in the consumer group")
 	linger             = flag.Duration("linger", 0, "if non-zero, linger to use when producing")
@@ -176,7 +177,7 @@ func main() {
 
 	if *seqRead {
 		srw := verifier.NewSeqReadWorker(verifier.NewSeqReadConfig(
-			makeWorkerConfig(), "sequential", nPartitions,
+			makeWorkerConfig(), "sequential", nPartitions, *seqConsumeCount,
 		))
 		workers = append(workers, &srw)
 
@@ -226,7 +227,9 @@ func main() {
 	}
 
 	if *cgReaders > 0 {
-		grw := verifier.NewGroupReadWorker(verifier.NewGroupReadConfig(makeWorkerConfig(), "groupReader", nPartitions, *cgReaders))
+		grw := verifier.NewGroupReadWorker(
+			verifier.NewGroupReadConfig(makeWorkerConfig(), "groupReader", nPartitions, *cgReaders,
+				*seqConsumeCount))
 		workers = append(workers, &grw)
 		waitErr := grw.Wait()
 		util.Chk(waitErr, "Consumer error: %v", err)
