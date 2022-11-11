@@ -3,18 +3,18 @@ module github.com/redpanda-data/kgo-verifier
 go 1.17
 
 require (
+	github.com/google/uuid v1.1.1
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475
 	github.com/sirupsen/logrus v1.8.1
-	github.com/twmb/franz-go v1.7.1-0.20220901194750-0ca6478600c6
+	github.com/twmb/franz-go v1.9.1
 	github.com/twmb/franz-go/pkg/kadm v0.0.0-20211116225244-e97ad6b8ef3e
 	github.com/twmb/franz-go/pkg/kmsg v1.2.0
-	github.com/vectorizedio/redpanda/src/go/rpk v0.0.0-20211217123319-86af7226d9f0
+    github.com/vectorizedio/redpanda/src/go/rpk v0.0.0-20211217123319-86af7226d9f0
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
 )
 
 require (
 	github.com/fsnotify/fsnotify v1.4.9 // indirect
-	github.com/google/uuid v1.1.1 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/icza/dyno v0.0.0-20200205103839-49cb13720835 // indirect
 	github.com/inconshreveable/mousetrap v1.0.0 // indirect
