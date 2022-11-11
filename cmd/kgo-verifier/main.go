@@ -88,7 +88,9 @@ func main() {
 	}
 
 	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, os.Interrupt)
+	if *remote {
+		signal.Notify(signalChan, os.Interrupt)
+	}
 
 	// Once we are done, keep the process alive until this channel is fired
 	shutdownChan := make(chan int, 1)
