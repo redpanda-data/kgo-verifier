@@ -39,6 +39,7 @@ type GroupWorkerStatus struct {
 	Validator ValidatorStatus `json:"validator"`
 	Active    bool            `json:"active"`
 	Errors    int             `json:"errors"`
+	runCount  int
 }
 
 type GroupReadWorker struct {
@@ -152,7 +153,10 @@ func (grw *GroupReadWorker) Wait() error {
 		return nil
 	}
 
-	groupName := fmt.Sprintf("kgo-verifier-%d-%d", time.Now().Unix(), os.Getpid())
+	groupName := fmt.Sprintf(
+		"kgo-verifier-%d-%d-%d", time.Now().Unix(), os.Getpid(), grw.Status.runCount)
+	grw.Status.runCount += 1
+
 	log.Infof("Reading with consumer group %s", groupName)
 
 	ctx, cancelFunc := context.WithCancel(context.Background())
