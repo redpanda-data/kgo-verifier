@@ -41,6 +41,7 @@ var (
 	cCount             = flag.Int("rand_read_msgs", 0, "Number of validation reads to do from each random reader")
 	seqRead            = flag.Bool("seq_read", false, "Whether to do sequential read validation")
 	parallelRead       = flag.Int("parallel", 1, "How many readers to run in parallel")
+	seqConsumeCount    = flag.Int("seq_read_msgs", -1, "Seq/group consumer: set max number of records to consume")
 	batchMaxBytes      = flag.Int("batch_max_bytes", 1048576, "the maximum batch size to allow per-partition (must be less than Kafka's max.message.bytes, producing)")
 	cgReaders          = flag.Int("consumer_group_readers", 0, "Number of parallel readers in the consumer group")
 	linger             = flag.Duration("linger", 0, "if non-zero, linger to use when producing")
@@ -50,6 +51,7 @@ var (
 	loop               = flag.Bool("loop", false, "For readers, run indefinitely until stopped via signal or HTTP call")
 	name               = flag.String("client-name", "kgo", "Name of kafka client")
 	fakeTimestampMs    = flag.Int64("fake-timestamp-ms", -1, "Producer: set artificial batch timestamps on an incrementing basis, starting from this number")
+	consumeTputMb      = flag.Int("consume-throughput-mb", -1, "Seq/group consumer: set max throughput in mb/s")
 
 	useTransactions      = flag.Bool("use-transactions", false, "Producer: use a transactional producer")
 	transactionAbortRate = flag.Float64("transaction-abort-rate", 0.0, "The probability that any given transaction should abort")
@@ -86,7 +88,9 @@ func main() {
 	}
 
 	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, os.Interrupt)
+	if *remote {
+		signal.Notify(signalChan, os.Interrupt)
+	}
 
 	// Once we are done, keep the process alive until this channel is fired
 	shutdownChan := make(chan int, 1)
@@ -176,7 +180,8 @@ func main() {
 
 	if *seqRead {
 		srw := verifier.NewSeqReadWorker(verifier.NewSeqReadConfig(
-			makeWorkerConfig(), "sequential", nPartitions,
+			makeWorkerConfig(), "sequential", nPartitions, *seqConsumeCount,
+			(*consumeTputMb)*1024*1024,
 		))
 		workers = append(workers, &srw)
 
@@ -226,10 +231,19 @@ func main() {
 	}
 
 	if *cgReaders > 0 {
-		grw := verifier.NewGroupReadWorker(verifier.NewGroupReadConfig(makeWorkerConfig(), "groupReader", nPartitions, *cgReaders))
+		grw := verifier.NewGroupReadWorker(
+			verifier.NewGroupReadConfig(
+				makeWorkerConfig(), "groupReader", nPartitions, *cgReaders,
+				*seqConsumeCount, (*consumeTputMb)*1024*1024))
 		workers = append(workers, &grw)
-		waitErr := grw.Wait()
-		util.Chk(waitErr, "Consumer error: %v", err)
+
+		firstPass := true
+		for firstPass || (len(lastPassChan) == 0 && *loop) {
+			log.Info("Starting group read pass")
+			firstPass = false
+			waitErr := grw.Wait()
+			util.Chk(waitErr, "Consumer error: %v", err)
+		}
 	}
 
 	if *remote {
