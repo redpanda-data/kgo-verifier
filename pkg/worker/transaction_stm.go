@@ -64,6 +64,25 @@ func (t *TransactionSTM) TryEndTransaction() error {
 	return nil
 }
 
+// If an OPERATION_NOT_ATTEMPTED error occurs on the producer it
+// can sometimes recover by rolling back the current transaction.
+func (t *TransactionSTM) TryRollbackTransaction() error {
+	if err := t.client.AbortBufferedRecords(t.ctx); err != nil {
+		log.Errorf("Error aborting buffered records: %v", err)
+		return err
+	}
+	if err := t.client.EndTransaction(t.ctx, kgo.TryAbort); err != nil {
+		log.Errorf("Error rolling back transaction: %v", err)
+		return err
+	}
+
+	log.Debugf("Rolled back a transaction; currentMgsProduced = %d aborted = %t", t.currentMgsProduced, t.abortedTransaction)
+
+	t.currentMgsProduced = 0
+	t.activeTransaction = false
+	return nil
+}
+
 // Returns true iff a new transaction was started and/or a current
 // transaction ended. This is to notify any producers that control
 // markers will be added to a partition's log.
