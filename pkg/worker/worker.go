@@ -109,6 +109,7 @@ type WorkerConfig struct {
 	BatchMaxbytes      uint
 	SaslUser           string
 	SaslPass           string
+	Transactions       bool
 }
 
 func (wc *WorkerConfig) MakeKgoOpts() []kgo.Opt {
@@ -126,6 +127,14 @@ func (wc *WorkerConfig) MakeKgoOpts() []kgo.Opt {
 	if wc.Name != "" {
 		opts = append(opts, kgo.ClientID(wc.Name))
 
+	}
+
+	if wc.Transactions {
+		opts = append(opts, []kgo.Opt{
+			// By default kgo reads uncommited records and unstable offsets
+			kgo.RequireStableFetchOffsets(),
+			kgo.FetchIsolationLevel(kgo.ReadCommitted()),
+		}...)
 	}
 
 	// Disable auth if username not given
@@ -148,7 +157,7 @@ func (wc *WorkerConfig) MakeKgoOpts() []kgo.Opt {
 	return opts
 }
 
-func NewWorkerConfig(name string, brokers string, trace bool, topic string, linger time.Duration, maxBufferedRecords uint) WorkerConfig {
+func NewWorkerConfig(name string, brokers string, trace bool, topic string, linger time.Duration, maxBufferedRecords uint, transactions bool) WorkerConfig {
 	return WorkerConfig{
 		Name:               name,
 		Brokers:            brokers,
@@ -158,5 +167,6 @@ func NewWorkerConfig(name string, brokers string, trace bool, topic string, ling
 		MaxBufferedRecords: maxBufferedRecords,
 		SaslUser:           "",
 		SaslPass:           "",
+		Transactions:       transactions,
 	}
 }

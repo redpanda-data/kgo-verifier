@@ -123,7 +123,7 @@ func main() {
 		name := fmt.Sprintf("%s_%d_w_%d", hostName, pid, i)
 		log.Debugf("Preparing worker %s...", name)
 		wConfig := worker.NewWorkerConfig(
-			name, *brokers, *trace, *topic, *linger, *maxBufferedRecords,
+			name, *brokers, *trace, *topic, *linger, *maxBufferedRecords, *useTransactions,
 		)
 		config := repeater.NewRepeaterConfig(wConfig, *group, partitions, *keys, *payloadSize, dataInFlightPerWorker)
 		lv := repeater.NewWorker(config)
