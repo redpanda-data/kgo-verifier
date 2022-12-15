@@ -243,6 +243,9 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 
 			if addedControlMarkers > 0 {
 				for i, _ := range nextOffset {
+					for j := int64(0); j < int64(addedControlMarkers); j = j + 1 {
+						pw.validOffsets.Insert(p, nextOffset[i]+j)
+					}
 					nextOffset[i] += addedControlMarkers
 				}
 			}
