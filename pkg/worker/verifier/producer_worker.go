@@ -75,6 +75,7 @@ func (pw *ProducerWorker) newRecord(producerId int, sequence int64) *kgo.Record 
 		// will report it as an invalid read if it's consumed. This is
 		// since messages in aborted transactions should never be read.
 		fmt.Fprintf(&key, "ABORTED MSG: %06d.%018d", producerId, sequence)
+		pw.Status.AbortedTransactionMessages += 1
 	}
 
 	payload := make([]byte, pw.config.messageSize)
@@ -106,6 +107,11 @@ type ProducerWorkerStatus struct {
 	// How many failures occured while trying to begin, abort,
 	// or commit a transaction.
 	FailedTransactions int64 `json:"failed_transactions"`
+
+	// How many messages were sent inside aborted transactions?
+	// (this is not the transaction abort count, it's the count of the messages
+	//  inside those transactions)
+	AbortedTransactionMessages int64 `json:"aborted_transaction_msgs"`
 
 	// Ack latency: a private histogram for the data,
 	// and a public summary for JSON output
