@@ -282,14 +282,6 @@ func (v *Worker) Init() {
 			kgo.ConsumerGroup(v.config.Group),
 		}...)
 
-		if v.transactionsEnabled {
-			opts = append(opts, []kgo.Opt{
-				// By default kgo reads uncommited records and unstable offsets
-				kgo.RequireStableFetchOffsets(),
-				kgo.FetchIsolationLevel(kgo.ReadCommitted()),
-			}...)
-		}
-
 		if v.config.Group != "" {
 			opts = append(opts, kgo.ConsumerGroup(v.config.Group))
 		}

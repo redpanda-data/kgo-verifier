@@ -69,6 +69,7 @@ func makeWorkerConfig() worker.WorkerConfig {
 		SaslUser:           *username,
 		SaslPass:           *password,
 		Name:               *name,
+		Transactions:       *useTransactions,
 	}
 
 	return c

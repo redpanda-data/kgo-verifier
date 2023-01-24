@@ -152,6 +152,11 @@ func (srw *SeqReadWorker) sequentialReadInner(startAt []int64, upTo []int64) ([]
 				complete[r.Partition] = true
 			}
 
+			// We subscribe to control records to make consuming-to-offset work, but we
+			// do not want to try and validate them.
+			if r.Attrs.IsControl() {
+				return
+			}
 			srw.Status.Validator.ValidateRecord(r, &validRanges)
 		})
 
