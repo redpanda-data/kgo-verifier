@@ -29,6 +29,9 @@ type TransactionSTM struct {
 	activeTransaction  bool
 	abortedTransaction bool
 	currentMgsProduced uint
+
+	// Used to track which partitions are in a transaciton
+	activePartitions map[int32]bool
 }
 
 func NewTransactionSTM(ctx context.Context, client *kgo.Client, config TransactionSTMConfig) *TransactionSTM {
@@ -41,6 +44,7 @@ func NewTransactionSTM(ctx context.Context, client *kgo.Client, config Transacti
 		activeTransaction:  false,
 		abortedTransaction: false,
 		currentMgsProduced: 0,
+		activePartitions:   map[int32]bool{},
 	}
 }
 
@@ -67,10 +71,10 @@ func (t *TransactionSTM) TryEndTransaction() error {
 // Returns true iff a new transaction was started and/or a current
 // transaction ended. This is to notify any producers that control
 // markers will be added to a partition's log.
-func (t *TransactionSTM) BeforeMessageSent() (int64, error) {
+func (t *TransactionSTM) BeforeMessageSent(partition_id int32) (map[int32]int64, error) {
 	// EndTransaction/abort and BeginTransaction will each leave
 	// one control record in each partition's log.
-	var addedControlMarkers int64 = 0
+	addedControlMarkers := map[int32]int64{}
 
 	if t.currentMgsProduced == t.config.msgsPerTransaction {
 		if err := t.client.Flush(t.ctx); err != nil {
@@ -87,7 +91,12 @@ func (t *TransactionSTM) BeforeMessageSent() (int64, error) {
 		t.currentMgsProduced = 0
 		t.activeTransaction = false
 
-		addedControlMarkers += 1
+		// Add control marker for all partitions in the ended transaction.
+		for pid, _ := range t.activePartitions {
+			addedControlMarkers[pid] += 1
+		}
+
+		t.activePartitions = map[int32]bool{}
 	}
 
 	// Begin new transaction if one doesn't exist
@@ -97,12 +106,16 @@ func (t *TransactionSTM) BeforeMessageSent() (int64, error) {
 
 		if err := t.client.BeginTransaction(); err != nil {
 			log.Errorf("Couldn't start a transaction: %v", err)
-			return 0, err
+			return addedControlMarkers, err
 		}
 
 		log.Debugf("Started transaction; will abort = %t", t.abortedTransaction)
+	}
 
-		addedControlMarkers += 1
+	// Add control marker if partition isn't in the active transaction yet.
+	if _, ok := t.activePartitions[partition_id]; !ok {
+		t.activePartitions[partition_id] = true
+		addedControlMarkers[partition_id] += 1
 	}
 
 	t.currentMgsProduced += 1

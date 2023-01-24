@@ -239,7 +239,7 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 		var p = rand.Int31n(pw.config.nPartitions)
 
 		if pw.transactionsEnabled {
-			addedControlMarkers, err := pw.transactionSTM.BeforeMessageSent()
+			addedControlMarkers, err := pw.transactionSTM.BeforeMessageSent(p)
 			if err != nil {
 				log.Errorf("Transaction error %v", err)
 				errored = true
@@ -247,13 +247,11 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 				break
 			}
 
-			if addedControlMarkers > 0 {
-				for i, _ := range nextOffset {
-					for j := int64(0); j < int64(addedControlMarkers); j = j + 1 {
-						pw.validOffsets.Insert(p, nextOffset[i]+j)
-					}
-					nextOffset[i] += addedControlMarkers
+			for pid, cnt := range addedControlMarkers {
+				for j := int64(0); j < int64(cnt); j = j + 1 {
+					pw.validOffsets.Insert(pid, nextOffset[pid]+j)
 				}
+				nextOffset[pid] += cnt
 			}
 		}
 

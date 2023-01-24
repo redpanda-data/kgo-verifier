@@ -372,7 +372,7 @@ loop:
 		}
 
 		if v.transactionsEnabled {
-			if _, err := v.transactionSTM.BeforeMessageSent(); err != nil {
+			if _, err := v.transactionSTM.BeforeMessageSent(-1); err != nil {
 				log.Errorf("Produce error; transaction failure: %v", err)
 				break loop
 			}
