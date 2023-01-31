@@ -9,8 +9,9 @@ require (
 	github.com/twmb/franz-go v1.9.1
 	github.com/twmb/franz-go/pkg/kadm v0.0.0-20211116225244-e97ad6b8ef3e
 	github.com/twmb/franz-go/pkg/kmsg v1.2.0
-    github.com/vectorizedio/redpanda/src/go/rpk v0.0.0-20211217123319-86af7226d9f0
+	github.com/vectorizedio/redpanda/src/go/rpk v0.0.0-20211217123319-86af7226d9f0
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
+	golang.org/x/time v0.2.0
 )
 
 require (
@@ -34,7 +35,6 @@ require (
 	golang.org/x/crypto v0.0.0-20220817201139-bc19a97f63c8 // indirect
 	golang.org/x/sys v0.0.0-20211101204403-39c9dd37992c // indirect
 	golang.org/x/text v0.3.7 // indirect
-	golang.org/x/time v0.2.0 // indirect
 	gopkg.in/ini.v1 v1.51.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
