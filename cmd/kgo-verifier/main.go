@@ -17,7 +17,10 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	rdebug "runtime/debug"
+	"strconv"
 	"sync"
+	"time"
 
 	"github.com/redpanda-data/kgo-verifier/pkg/util"
 	log "github.com/sirupsen/logrus"
@@ -158,6 +161,19 @@ func main() {
 
 	mux.HandleFunc("/last_pass", func(w http.ResponseWriter, r *http.Request) {
 		log.Info("Remote request /last_pass")
+		timeout := r.URL.Query().Get("timeout")
+		if len(timeout) > 0 {
+			timeoutSec, err := strconv.Atoi(timeout)
+			if err == nil {
+				log.Infof("Setting a timeout of %v seconds to print the stack trace", timeoutSec)
+				go func() {
+					time.Sleep(time.Duration(timeoutSec) * time.Second)
+					rdebug.PrintStack()
+				}()
+			} else {
+				log.Warn("unable to parse timeout query param, skipping printing stack trace logs")
+			}
+		}
 		lastPassChan <- 1
 	})
 
