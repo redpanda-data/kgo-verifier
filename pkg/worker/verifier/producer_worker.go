@@ -16,6 +16,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"golang.org/x/sync/semaphore"
+	"golang.org/x/time/rate"
 )
 
 type ProducerConfig struct {
@@ -25,10 +26,11 @@ type ProducerConfig struct {
 	messageSize     int
 	messageCount    int
 	fakeTimestampMs int64
+	rateLimitBytes  int
 }
 
 func NewProducerConfig(wc worker.WorkerConfig, name string, nPartitions int32,
-	messageSize int, messageCount int, fakeTimestampMs int64) ProducerConfig {
+	messageSize int, messageCount int, fakeTimestampMs int64, rateLimitBytes int) ProducerConfig {
 	return ProducerConfig{
 		workerCfg:       wc,
 		name:            name,
@@ -36,6 +38,7 @@ func NewProducerConfig(wc worker.WorkerConfig, name string, nPartitions int32,
 		messageCount:    messageCount,
 		messageSize:     messageSize,
 		fakeTimestampMs: fakeTimestampMs,
+		rateLimitBytes:  rateLimitBytes,
 	}
 }
 
@@ -230,7 +233,12 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 	bad_offsets := make(chan BadOffset, 16384)
 	concurrent := semaphore.NewWeighted(4096)
 
-	log.Infof("Producing %d messages (%d bytes)", n, pw.config.messageSize)
+	log.Infof("Producing %d messages (%d bytes), rate limit=%d", n, pw.config.messageSize, pw.config.rateLimitBytes)
+
+	var rlimiter *rate.Limiter
+	if pw.config.rateLimitBytes > 0 {
+		rlimiter = rate.NewLimiter(rate.Limit(pw.config.rateLimitBytes), pw.config.rateLimitBytes)
+	}
 
 	for i := int64(0); i < n && len(bad_offsets) == 0; i = i + 1 {
 		concurrent.Acquire(context.Background(), 1)
@@ -263,6 +271,10 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 		r := pw.newRecord(0, expectOffset)
 		r.Partition = p
 		wg.Add(1)
+
+		if rlimiter != nil {
+			rlimiter.WaitN(context.Background(), len(r.Value))
+		}
 
 		log.Debugf("Writing partition %d at %d", r.Partition, expectOffset)
 
