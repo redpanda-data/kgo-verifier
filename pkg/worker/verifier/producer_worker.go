@@ -310,6 +310,10 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 	wg.Wait()
 	close(bad_offsets)
 
+	log.Info("Closing client...")
+	client.Close()
+	log.Info("Closed client.")
+
 	pw.produceCheckpoint()
 
 	if errored {
