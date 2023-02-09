@@ -38,6 +38,7 @@ var (
 	remote             = flag.Bool("remote", false, "Operate in remote-controlled mode")
 	remotePort         = flag.Uint("remote-port", 7884, "Port for report control HTTP listener")
 	profile            = flag.String("profile", "", "Enable CPU profiling")
+	rateLimitBps       = flag.Int("rate-limit-bps", -1, "Bytes/second throttle (global, will be split equally between workers)")
 
 	useTransactions      = flag.Bool("use-transactions", false, "Producer: use a transactional producer")
 	transactionAbortRate = flag.Float64("transaction-abort-rate", 0.0, "The probability that any given transaction should abort")
@@ -118,6 +119,11 @@ func main() {
 
 	pid := os.Getpid()
 
+	var rateLimitPerWorker int = -1
+	if *rateLimitBps > 0 {
+		rateLimitPerWorker = *rateLimitBps / int(*workers)
+	}
+
 	log.Infof("Preparing %d workers...", *workers)
 	for i := uint(0); i < *workers; i++ {
 		name := fmt.Sprintf("%s_%d_w_%d", hostName, pid, i)
@@ -125,7 +131,7 @@ func main() {
 		wConfig := worker.NewWorkerConfig(
 			name, *brokers, *trace, *topic, *linger, *maxBufferedRecords, *useTransactions,
 		)
-		config := repeater.NewRepeaterConfig(wConfig, *group, partitions, *keys, *payloadSize, dataInFlightPerWorker)
+		config := repeater.NewRepeaterConfig(wConfig, *group, partitions, *keys, *payloadSize, dataInFlightPerWorker, rateLimitPerWorker)
 		lv := repeater.NewWorker(config)
 		if *useTransactions {
 			tconfig := worker.NewTransactionSTMConfig(*transactionAbortRate, *msgsPerTransaction)

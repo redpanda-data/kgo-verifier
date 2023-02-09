@@ -30,6 +30,7 @@ import (
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"golang.org/x/time/rate"
 
 	"github.com/redpanda-data/kgo-verifier/pkg/util"
 	worker "github.com/redpanda-data/kgo-verifier/pkg/worker"
@@ -57,9 +58,10 @@ type RepeaterConfig struct {
 	KeySpace       worker.KeySpace
 	ValueGenerator worker.ValueGenerator
 	DataInFlight   uint64
+	RateLimitBps   int
 }
 
-func NewRepeaterConfig(cfg worker.WorkerConfig, group string, partitions []int32, keys uint64, payloadSize uint64, dataInFlight uint64) RepeaterConfig {
+func NewRepeaterConfig(cfg worker.WorkerConfig, group string, partitions []int32, keys uint64, payloadSize uint64, dataInFlight uint64, rateLimitBps int) RepeaterConfig {
 	return RepeaterConfig{
 		workerCfg:      cfg,
 		Group:          group,
@@ -67,6 +69,7 @@ func NewRepeaterConfig(cfg worker.WorkerConfig, group string, partitions []int32
 		KeySpace:       worker.KeySpace{UniqueCount: keys},
 		ValueGenerator: worker.ValueGenerator{PayloadSize: payloadSize},
 		DataInFlight:   dataInFlight,
+		RateLimitBps:   rateLimitBps,
 	}
 }
 
@@ -348,6 +351,11 @@ func (v *Worker) Produce() {
 
 	var ackWait sync.WaitGroup
 
+	var rlimiter *rate.Limiter
+	if v.config.RateLimitBps > 0 {
+		rlimiter = rate.NewLimiter(rate.Limit(v.config.RateLimitBps), v.config.RateLimitBps)
+	}
+
 loop:
 	for {
 		// Drop out if signalled to stop
@@ -414,6 +422,10 @@ loop:
 		err := binary.Write(&messageBytes, binary.BigEndian, message)
 		messageBytes.Write(v.payload)
 		util.Chk(err, "Serializing message")
+
+		if rlimiter != nil {
+			rlimiter.WaitN(context.Background(), messageBytes.Len())
+		}
 
 		r = kgo.KeySliceRecord(key.Bytes(), messageBytes.Bytes())
 
