@@ -17,7 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	rdebug "runtime/debug"
+	"runtime/pprof"
 	"strconv"
 	"sync"
 	"time"
@@ -169,13 +169,18 @@ func main() {
 				log.Infof("Setting a timeout of %v seconds to print the stack trace", timeoutSec)
 				go func() {
 					time.Sleep(time.Duration(timeoutSec) * time.Second)
-					rdebug.PrintStack()
+					pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
 				}()
 			} else {
 				log.Warn("unable to parse timeout query param, skipping printing stack trace logs")
 			}
 		}
 		lastPassChan <- 1
+	})
+
+	mux.HandleFunc("/print_stack", func(w http.ResponseWriter, r *http.Request) {
+		log.Infof("Printing stack on remote request:")
+		pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
 	})
 
 	go http.ListenAndServe(fmt.Sprintf("0.0.0.0:%d", *remotePort), mux)

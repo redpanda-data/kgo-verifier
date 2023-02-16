@@ -171,6 +171,11 @@ func main() {
 		w.Write(serialized)
 	})
 
+	mux.HandleFunc("/print_stack", func(w http.ResponseWriter, r *http.Request) {
+		log.Infof("Printing stack on remote request:")
+		pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
+	})
+
 	mux.HandleFunc("/reset", func(w http.ResponseWriter, r *http.Request) {
 		for _, v := range verifiers {
 			v.Reset()
