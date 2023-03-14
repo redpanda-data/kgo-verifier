@@ -57,26 +57,36 @@ func (w *RandomReadWorker) newClient(opts []kgo.Opt) (*kgo.Client, error) {
 	return client, nil
 }
 
-func (w *RandomReadWorker) Wait() error {
-	w.Status.Active = true
-	defer func() { w.Status.Active = false }()
-
+func (w *RandomReadWorker) loadOffsets() ([]int64, []int64, error) {
 	// Basic client to read offsets
 	client, err := w.newClient(make([]kgo.Opt, 0))
 	if err != nil {
 		log.Errorf("Error constructing client: %v", err)
-		return err
+		return nil, nil, err
 	}
 	endOffsets := GetOffsets(client, w.config.workerCfg.Topic, w.config.nPartitions, -1)
 	client.Close()
 	client, err = w.newClient(make([]kgo.Opt, 0))
 	if err != nil {
 		log.Errorf("Error constructing client: %v", err)
-		return err
+		return nil, nil, err
 	}
 	startOffsets := GetOffsets(client, w.config.workerCfg.Topic, w.config.nPartitions, -2)
 	client.Close()
 	runtime.GC()
+
+	return startOffsets, endOffsets, err
+}
+
+func (w *RandomReadWorker) Wait() error {
+	w.Status.Active = true
+	defer func() { w.Status.Active = false }()
+
+	startOffsets, endOffsets, err := w.loadOffsets()
+	if err != nil {
+		log.Errorf("Error loading offsets: %v", err)
+		return err
+	}
 
 	validRanges := LoadTopicOffsetRanges(w.config.workerCfg.Topic, w.config.nPartitions)
 
@@ -111,7 +121,7 @@ func (w *RandomReadWorker) Wait() error {
 			kgo.ConsumePartitions(offsets),
 		}
 
-		client, err = w.newClient(opts)
+		client, err := w.newClient(opts)
 		if err != nil {
 			log.Errorf("Error constructing client: %v", err)
 			return err
@@ -135,7 +145,16 @@ func (w *RandomReadWorker) Wait() error {
 			w.Status.Validator.ValidateRecord(r, &validRanges)
 		})
 		if len(fetches.Records()) == 0 {
-			ctxLog.Errorf("Empty response reading from partition %d at %d", p, offset)
+			ctxLog.Errorf("Reloading offsets on empty response reading from partition %d at %d", p, offset)
+
+			// If we get an empty response, it may be because the partition was prefix-truncated
+			// and we tried to read an out of range offset: handle this by re-loading our
+			// offset bounds
+			startOffsets, endOffsets, err = w.loadOffsets()
+			if err != nil {
+				log.Errorf("Error reloading offsets: %v", err)
+				return err
+			}
 		} else {
 			// Each read on which we get some records counts toward
 			// the number of reads we were requested to do.
