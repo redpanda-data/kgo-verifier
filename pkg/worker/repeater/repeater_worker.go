@@ -36,15 +36,6 @@ import (
 	worker "github.com/redpanda-data/kgo-verifier/pkg/worker"
 )
 
-func newRecord(producerId int, sequence int64) *kgo.Record {
-	var key bytes.Buffer
-	fmt.Fprintf(&key, "%06d.%018d", producerId, sequence)
-
-	var r *kgo.Record
-	r = kgo.KeySliceRecord(key.Bytes(), key.Bytes())
-	return r
-}
-
 type MessageBody struct {
 	Token   int64 `json:"token"`
 	SentAt  int64 `json:"sent_at"`
