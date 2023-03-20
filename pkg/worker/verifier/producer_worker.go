@@ -28,6 +28,7 @@ type ProducerConfig struct {
 	fakeTimestampMs   int64
 	rateLimitBytes    int
 	keySetCardinality int
+	valueGenerator    worker.ValueGenerator
 }
 
 func NewProducerConfig(wc worker.WorkerConfig, name string, nPartitions int32,
@@ -41,6 +42,10 @@ func NewProducerConfig(wc worker.WorkerConfig, name string, nPartitions int32,
 		fakeTimestampMs:   fakeTimestampMs,
 		rateLimitBytes:    rateLimitBytes,
 		keySetCardinality: keySetCardinality,
+		valueGenerator: worker.ValueGenerator{
+			PayloadSize:  uint64(messageSize),
+			Compressible: wc.CompressiblePayload,
+		},
 	}
 }
 
@@ -49,6 +54,8 @@ type ProducerWorker struct {
 	Status          ProducerWorkerStatus
 	validOffsets    TopicOffsetRanges
 	fakeTimestampMs int64
+
+	payload []byte
 
 	// Used for enabling transactional produces
 	transactionsEnabled  bool
@@ -61,6 +68,7 @@ func NewProducerWorker(cfg ProducerConfig) ProducerWorker {
 		config:          cfg,
 		Status:          NewProducerWorkerStatus(),
 		validOffsets:    LoadTopicOffsetRanges(cfg.workerCfg.Topic, cfg.nPartitions),
+		payload:         cfg.valueGenerator.Generate(),
 		fakeTimestampMs: cfg.fakeTimestampMs,
 	}
 }
@@ -207,7 +215,6 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 	opts := pw.config.workerCfg.MakeKgoOpts()
 
 	opts = append(opts, []kgo.Opt{
-		kgo.ProducerBatchCompression(kgo.NoCompression()),
 		kgo.RequiredAcks(kgo.AllISRAcks()),
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
 	}...)

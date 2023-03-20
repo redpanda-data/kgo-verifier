@@ -43,6 +43,9 @@ var (
 	useTransactions      = flag.Bool("use-transactions", false, "Producer: use a transactional producer")
 	transactionAbortRate = flag.Float64("transaction-abort-rate", 0.0, "The probability that any given transaction should abort")
 	msgsPerTransaction   = flag.Uint("msgs-per-transaction", 1, "The number of messages that should be in a given transaction")
+
+	compressionType     = flag.String("compression-type", "", "One of gzip, snappy, lz4, zstd, or 'mixed' to pick a random codec for each producer")
+	compressiblePayload = flag.Bool("compressible-payload", false, "If true, use a highly compressible payload instead of the default random payload")
 )
 
 // NewAdmin returns a franz-go admin client.
@@ -109,6 +112,10 @@ func main() {
 
 	dataInFlightPerWorker := (*initialDataMb * 1024 * 1024) / uint64(*workers)
 
+	if dataInFlightPerWorker / *payloadSize <= 0 {
+		panic("-initial-data-mb is too small for the configured payload size & worker count")
+	}
+
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
 
@@ -129,8 +136,7 @@ func main() {
 		name := fmt.Sprintf("%s_%d_w_%d", hostName, pid, i)
 		log.Debugf("Preparing worker %s...", name)
 		wConfig := worker.NewWorkerConfig(
-			name, *brokers, *trace, *topic, *linger, *maxBufferedRecords, *useTransactions,
-		)
+			name, *brokers, *trace, *topic, *linger, *maxBufferedRecords, *useTransactions, *compressionType, *compressiblePayload)
 		config := repeater.NewRepeaterConfig(wConfig, *group, partitions, *keys, *payloadSize, dataInFlightPerWorker, rateLimitPerWorker)
 		lv := repeater.NewWorker(config)
 		if *useTransactions {

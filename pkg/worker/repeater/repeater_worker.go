@@ -58,7 +58,7 @@ func NewRepeaterConfig(cfg worker.WorkerConfig, group string, partitions []int32
 		Group:          group,
 		Partitions:     partitions,
 		KeySpace:       worker.KeySpace{UniqueCount: keys},
-		ValueGenerator: worker.ValueGenerator{PayloadSize: payloadSize},
+		ValueGenerator: worker.ValueGenerator{PayloadSize: payloadSize, Compressible: cfg.CompressiblePayload},
 		DataInFlight:   dataInFlight,
 		RateLimitBps:   rateLimitBps,
 	}
@@ -193,11 +193,9 @@ func NewWorker(config RepeaterConfig) Worker {
 	consumeCtx, cancelConsume := context.WithCancel(context.Background())
 	produceCtx, cancelProduce := context.WithCancel(context.Background())
 
-	payload := make([]byte, config.ValueGenerator.PayloadSize)
-
 	total_initial_tokens := config.DataInFlight / config.ValueGenerator.PayloadSize
 
-	log.Debugf("Constructing worker with initial tokens %d (%dMB)",
+	log.Debugf("Constructing worker with initial tokens %d (%d bytes)",
 		total_initial_tokens, config.DataInFlight)
 
 	var max_size int64 = 128000
@@ -207,7 +205,7 @@ func NewWorker(config RepeaterConfig) Worker {
 		produceCtx:    produceCtx,
 		cancelConsume: cancelConsume,
 		cancelProduce: cancelProduce,
-		payload:       payload,
+		payload:       config.ValueGenerator.Generate(),
 		globalStats:   worker.NewMessageStats(),
 		capacity:      max_size,
 		pending:       make(chan int64, max_size),

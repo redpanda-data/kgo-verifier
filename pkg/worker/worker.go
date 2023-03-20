@@ -2,6 +2,7 @@ package worker
 
 import (
 	"fmt"
+	"math/rand"
 	"os"
 	"strings"
 	"time"
@@ -96,7 +97,40 @@ type KeySpace struct {
 }
 
 type ValueGenerator struct {
-	PayloadSize uint64
+	PayloadSize  uint64
+	Compressible bool
+}
+
+var compressible_payload []byte
+
+func (vg *ValueGenerator) Generate() []byte {
+	if vg.Compressible {
+		// Zeros, which is about as compressible as an array can be.
+		if len(compressible_payload) == 0 {
+			compressible_payload = make([]byte, vg.PayloadSize)
+		} else if len(compressible_payload) != int(vg.PayloadSize) {
+			// This is an implementation shortcut that lets us use a simple
+			// global array of zeros for compressible payloads, as long
+			// as everyone wants the same size.
+			panic("Can't have multiple compressible generators of different sizes")
+		}
+
+		// Everyone who asks for compressible payload gets a ref to the same array
+		// of zeros: this is worthwhile because a compressible producer might do
+		// huge message sizes (e.g. 128MIB of zeros compresses down to <1MiB.
+		return compressible_payload
+	} else {
+		payload := make([]byte, vg.PayloadSize)
+		// An incompressible high entropy payload
+		n, err := rand.Read(payload)
+		if err != nil {
+			panic(err.Error())
+		}
+		if n != int(vg.PayloadSize) {
+			panic("Unexpected byte count from rand.Read")
+		}
+		return payload
+	}
 }
 
 type WorkerConfig struct {
@@ -110,6 +144,46 @@ type WorkerConfig struct {
 	SaslUser           string
 	SaslPass           string
 	Transactions       bool
+
+	// A kafka `compression.type`, or `mixed` to use a random one for each worker (requires
+	// that you have multiple workers to be meaningful)
+	CompressionType string
+
+	// If true, use a payload that compresses easily.  If false, use an
+	// incompressible payload.
+	CompressiblePayload bool
+}
+
+func CompressionCodecFromString(s string) (kgo.CompressionCodec, error) {
+	if s == "mixed" {
+		i := 1 + rand.Uint32()%4
+		if i == 1 {
+			return kgo.GzipCompression(), nil
+		} else if i == 2 {
+			return kgo.SnappyCompression(), nil
+		} else if i == 3 {
+			return kgo.Lz4Compression(), nil
+		} else if i == 4 {
+			return kgo.ZstdCompression(), nil
+		} else {
+			panic("Unreachable")
+		}
+	} else {
+		if s == "none" {
+			return kgo.NoCompression(), nil
+		} else if s == "gzip" {
+			return kgo.GzipCompression(), nil
+		} else if s == "snappy" {
+			return kgo.SnappyCompression(), nil
+		} else if s == "lz4" {
+			return kgo.Lz4Compression(), nil
+		} else if s == "zstd" {
+			return kgo.ZstdCompression(), nil
+		} else {
+			return kgo.NoCompression(), fmt.Errorf("Unknown compression type %s", s)
+		}
+	}
+
 }
 
 func (wc *WorkerConfig) MakeKgoOpts() []kgo.Opt {
@@ -122,6 +196,20 @@ func (wc *WorkerConfig) MakeKgoOpts() []kgo.Opt {
 		kgo.ProducerBatchMaxBytes(int32(wc.BatchMaxbytes)),
 		kgo.MaxBufferedRecords(int(wc.MaxBufferedRecords)),
 		kgo.RequiredAcks(kgo.AllISRAcks()),
+	}
+
+	if wc.CompressionType != "" {
+		codec, err := CompressionCodecFromString(wc.CompressionType)
+		if err != nil {
+			panic(err.Error())
+		} else {
+			opts = append(opts, kgo.ProducerBatchCompression(codec))
+		}
+	} else {
+		// Default: do not compress.  This aligns with typical test/bench use cases
+		// where we wanted a given message size to translate into the same sized I/O
+		// on the server.
+		opts = append(opts, kgo.ProducerBatchCompression(kgo.NoCompression()))
 	}
 
 	if wc.Name != "" {
@@ -157,16 +245,19 @@ func (wc *WorkerConfig) MakeKgoOpts() []kgo.Opt {
 	return opts
 }
 
-func NewWorkerConfig(name string, brokers string, trace bool, topic string, linger time.Duration, maxBufferedRecords uint, transactions bool) WorkerConfig {
+func NewWorkerConfig(name string, brokers string, trace bool, topic string, linger time.Duration, maxBufferedRecords uint, transactions bool,
+	compressionType string, commpressiblePayload bool) WorkerConfig {
 	return WorkerConfig{
-		Name:               name,
-		Brokers:            brokers,
-		Trace:              trace,
-		Topic:              topic,
-		Linger:             linger,
-		MaxBufferedRecords: maxBufferedRecords,
-		SaslUser:           "",
-		SaslPass:           "",
-		Transactions:       transactions,
+		Name:                name,
+		Brokers:             brokers,
+		Trace:               trace,
+		Topic:               topic,
+		Linger:              linger,
+		MaxBufferedRecords:  maxBufferedRecords,
+		SaslUser:            "",
+		SaslPass:            "",
+		Transactions:        transactions,
+		CompressionType:     compressionType,
+		CompressiblePayload: commpressiblePayload,
 	}
 }
