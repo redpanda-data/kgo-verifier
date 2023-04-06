@@ -42,24 +42,24 @@ type ValidatorStatus struct {
 }
 
 func (cs *ValidatorStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffsetRanges) {
-	expect_key := fmt.Sprintf("%06d.%018d", 0, r.Offset)
+	expect_header_key := fmt.Sprintf("%06d.%018d", 0, r.Offset)
 	log.Debugf("Consumed %s on p=%d at o=%d", r.Key, r.Partition, r.Offset)
 	cs.lock.Lock()
 	defer cs.lock.Unlock()
 
-	if expect_key != string(r.Key) {
+	if expect_header_key != string(r.Headers[0].Value) {
 		shouldBeValid := validRanges.Contains(r.Partition, r.Offset)
 
 		if shouldBeValid {
 			cs.InvalidReads += 1
-			util.Die("Bad read at offset %d on partition %s/%d.  Expect '%s', found '%s'", r.Offset, r.Topic, r.Partition, expect_key, r.Key)
+			util.Die("Bad read at offset %d on partition %s/%d.  Expect '%s', found '%s'", r.Offset, r.Topic, r.Partition, expect_header_key, r.Headers[0].Value)
 		} else {
 			cs.OutOfScopeInvalidReads += 1
 			log.Infof("Ignoring read validation at offset outside valid range %s/%d %d", r.Topic, r.Partition, r.Offset)
 		}
 	} else {
 		cs.ValidReads += 1
-		log.Debugf("Read OK (%s) on p=%d at o=%d", r.Key, r.Partition, r.Offset)
+		log.Debugf("Read OK (%s) on p=%d at o=%d", r.Headers[0].Value, r.Partition, r.Offset)
 	}
 
 	if time.Since(cs.lastCheckpoint) > time.Second*5 {

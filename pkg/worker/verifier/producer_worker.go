@@ -69,21 +69,23 @@ func (v *ProducerWorker) EnableTransactions(config worker.TransactionSTMConfig) 
 }
 
 func (pw *ProducerWorker) newRecord(producerId int, sequence int64) *kgo.Record {
-	var key bytes.Buffer
 
+	var header_key bytes.Buffer
 	if !pw.transactionsEnabled || !pw.transactionSTM.InAbortedTransaction() {
-		fmt.Fprintf(&key, "%06d.%018d", producerId, sequence)
+		fmt.Fprintf(&header_key, "%06d.%018d", producerId, sequence)
 	} else {
 		// This message ensures that `ValidatorStatus.ValidateRecord`
 		// will report it as an invalid read if it's consumed. This is
 		// since messages in aborted transactions should never be read.
-		fmt.Fprintf(&key, "ABORTED MSG: %06d.%018d", producerId, sequence)
+		fmt.Fprintf(&header_key, "ABORTED MSG: %06d.%018d", producerId, sequence)
 		pw.Status.AbortedTransactionMessages += 1
 	}
 
 	payload := make([]byte, pw.config.messageSize)
 
-	var r *kgo.Record = kgo.KeySliceRecord(key.Bytes(), payload)
+	var r *kgo.Record = kgo.KeySliceRecord(header_key.Bytes(), payload)
+
+	r.Headers = append(r.Headers, kgo.RecordHeader{Key: "KGO_VERIFIER_RECORD_ID", Value: header_key.Bytes()})
 
 	if pw.fakeTimestampMs != -1 {
 		r.Timestamp = time.Unix(0, pw.fakeTimestampMs*1000000)
