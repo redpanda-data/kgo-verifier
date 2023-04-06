@@ -56,6 +56,7 @@ var (
 	fakeTimestampMs     = flag.Int64("fake-timestamp-ms", -1, "Producer: set artificial batch timestamps on an incrementing basis, starting from this number")
 	consumeTputMb       = flag.Int("consume-throughput-mb", -1, "Seq/group consumer: set max throughput in mb/s")
 	produceRateLimitBps = flag.Int("produce-throughput-bps", -1, "Producer: set max throughput in bytes/s")
+	keySetCardinality   = flag.Int("key-set-cardinality", -1, "Cardinality of a set of possible record keys (makes data compactible)")
 
 	useTransactions      = flag.Bool("use-transactions", false, "Producer: use a transactional producer")
 	transactionAbortRate = flag.Float64("transaction-abort-rate", 0.0, "The probability that any given transaction should abort")
@@ -187,7 +188,7 @@ func main() {
 
 	if *pCount > 0 {
 		log.Info("Starting producer...")
-		pwc := verifier.NewProducerConfig(makeWorkerConfig(), "producer", nPartitions, *mSize, *pCount, *fakeTimestampMs, (*produceRateLimitBps))
+		pwc := verifier.NewProducerConfig(makeWorkerConfig(), "producer", nPartitions, *mSize, *pCount, *fakeTimestampMs, (*produceRateLimitBps), *keySetCardinality)
 		pw := verifier.NewProducerWorker(pwc)
 
 		if *useTransactions {

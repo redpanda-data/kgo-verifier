@@ -20,25 +20,27 @@ import (
 )
 
 type ProducerConfig struct {
-	workerCfg       worker.WorkerConfig
-	name            string
-	nPartitions     int32
-	messageSize     int
-	messageCount    int
-	fakeTimestampMs int64
-	rateLimitBytes  int
+	workerCfg         worker.WorkerConfig
+	name              string
+	nPartitions       int32
+	messageSize       int
+	messageCount      int
+	fakeTimestampMs   int64
+	rateLimitBytes    int
+	keySetCardinality int
 }
 
 func NewProducerConfig(wc worker.WorkerConfig, name string, nPartitions int32,
-	messageSize int, messageCount int, fakeTimestampMs int64, rateLimitBytes int) ProducerConfig {
+	messageSize int, messageCount int, fakeTimestampMs int64, rateLimitBytes int, keySetCardinality int) ProducerConfig {
 	return ProducerConfig{
-		workerCfg:       wc,
-		name:            name,
-		nPartitions:     nPartitions,
-		messageCount:    messageCount,
-		messageSize:     messageSize,
-		fakeTimestampMs: fakeTimestampMs,
-		rateLimitBytes:  rateLimitBytes,
+		workerCfg:         wc,
+		name:              name,
+		nPartitions:       nPartitions,
+		messageCount:      messageCount,
+		messageSize:       messageSize,
+		fakeTimestampMs:   fakeTimestampMs,
+		rateLimitBytes:    rateLimitBytes,
+		keySetCardinality: keySetCardinality,
 	}
 }
 
@@ -69,21 +71,34 @@ func (v *ProducerWorker) EnableTransactions(config worker.TransactionSTMConfig) 
 }
 
 func (pw *ProducerWorker) newRecord(producerId int, sequence int64) *kgo.Record {
-	var key bytes.Buffer
 
+	var header_key bytes.Buffer
 	if !pw.transactionsEnabled || !pw.transactionSTM.InAbortedTransaction() {
-		fmt.Fprintf(&key, "%06d.%018d", producerId, sequence)
+		fmt.Fprintf(&header_key, "%06d.%018d", producerId, sequence)
+
 	} else {
 		// This message ensures that `ValidatorStatus.ValidateRecord`
 		// will report it as an invalid read if it's consumed. This is
 		// since messages in aborted transactions should never be read.
-		fmt.Fprintf(&key, "ABORTED MSG: %06d.%018d", producerId, sequence)
+		fmt.Fprintf(&header_key, "ABORTED MSG: %06d.%018d", producerId, sequence)
 		pw.Status.AbortedTransactionMessages += 1
 	}
 
 	payload := make([]byte, pw.config.messageSize)
+	var r *kgo.Record
 
-	var r *kgo.Record = kgo.KeySliceRecord(key.Bytes(), payload)
+	if pw.config.keySetCardinality < 0 {
+		// by default use the same value as in record id header key
+		r = kgo.KeySliceRecord(header_key.Bytes(), payload)
+	} else {
+		// generate a random key from a set of requested cardinality
+		var key bytes.Buffer
+		fmt.Fprintf(&key, "key-%d", rand.Intn(pw.config.keySetCardinality))
+		r = kgo.KeySliceRecord(key.Bytes(), payload)
+
+	}
+
+	r.Headers = append(r.Headers, kgo.RecordHeader{Key: "KGO_VERIFIER_RECORD_ID", Value: header_key.Bytes()})
 
 	if pw.fakeTimestampMs != -1 {
 		r.Timestamp = time.Unix(0, pw.fakeTimestampMs*1000000)
