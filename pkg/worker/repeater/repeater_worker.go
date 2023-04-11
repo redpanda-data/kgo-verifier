@@ -36,15 +36,6 @@ import (
 	worker "github.com/redpanda-data/kgo-verifier/pkg/worker"
 )
 
-func newRecord(producerId int, sequence int64) *kgo.Record {
-	var key bytes.Buffer
-	fmt.Fprintf(&key, "%06d.%018d", producerId, sequence)
-
-	var r *kgo.Record
-	r = kgo.KeySliceRecord(key.Bytes(), key.Bytes())
-	return r
-}
-
 type MessageBody struct {
 	Token   int64 `json:"token"`
 	SentAt  int64 `json:"sent_at"`
@@ -67,7 +58,7 @@ func NewRepeaterConfig(cfg worker.WorkerConfig, group string, partitions []int32
 		Group:          group,
 		Partitions:     partitions,
 		KeySpace:       worker.KeySpace{UniqueCount: keys},
-		ValueGenerator: worker.ValueGenerator{PayloadSize: payloadSize},
+		ValueGenerator: worker.ValueGenerator{PayloadSize: payloadSize, Compressible: cfg.CompressiblePayload},
 		DataInFlight:   dataInFlight,
 		RateLimitBps:   rateLimitBps,
 	}
@@ -202,11 +193,9 @@ func NewWorker(config RepeaterConfig) Worker {
 	consumeCtx, cancelConsume := context.WithCancel(context.Background())
 	produceCtx, cancelProduce := context.WithCancel(context.Background())
 
-	payload := make([]byte, config.ValueGenerator.PayloadSize)
-
 	total_initial_tokens := config.DataInFlight / config.ValueGenerator.PayloadSize
 
-	log.Debugf("Constructing worker with initial tokens %d (%dMB)",
+	log.Debugf("Constructing worker with initial tokens %d (%d bytes)",
 		total_initial_tokens, config.DataInFlight)
 
 	var max_size int64 = 128000
@@ -216,7 +205,7 @@ func NewWorker(config RepeaterConfig) Worker {
 		produceCtx:    produceCtx,
 		cancelConsume: cancelConsume,
 		cancelProduce: cancelProduce,
-		payload:       payload,
+		payload:       config.ValueGenerator.Generate(),
 		globalStats:   worker.NewMessageStats(),
 		capacity:      max_size,
 		pending:       make(chan int64, max_size),

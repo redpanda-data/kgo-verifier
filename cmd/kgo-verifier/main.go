@@ -61,20 +61,25 @@ var (
 	useTransactions      = flag.Bool("use-transactions", false, "Producer: use a transactional producer")
 	transactionAbortRate = flag.Float64("transaction-abort-rate", 0.0, "The probability that any given transaction should abort")
 	msgsPerTransaction   = flag.Uint("msgs-per-transaction", 1, "The number of messages that should be in a given transaction")
+
+	compressionType     = flag.String("compression-type", "", "One of none, gzip, snappy, lz4, zstd, or 'mixed' to pick a random codec for each producer")
+	compressiblePayload = flag.Bool("compressible-payload", false, "If true, use a highly compressible payload instead of the default random payload")
 )
 
 func makeWorkerConfig() worker.WorkerConfig {
 	c := worker.WorkerConfig{
-		Brokers:            *brokers,
-		Trace:              *trace,
-		Topic:              *topic,
-		Linger:             *linger,
-		MaxBufferedRecords: *maxBufferedRecords,
-		BatchMaxbytes:      uint(*batchMaxBytes),
-		SaslUser:           *username,
-		SaslPass:           *password,
-		Name:               *name,
-		Transactions:       *useTransactions,
+		Brokers:             *brokers,
+		Trace:               *trace,
+		Topic:               *topic,
+		Linger:              *linger,
+		MaxBufferedRecords:  *maxBufferedRecords,
+		BatchMaxbytes:       uint(*batchMaxBytes),
+		SaslUser:            *username,
+		SaslPass:            *password,
+		Name:                *name,
+		Transactions:        *useTransactions,
+		CompressionType:     *compressionType,
+		CompressiblePayload: *compressiblePayload,
 	}
 
 	return c
