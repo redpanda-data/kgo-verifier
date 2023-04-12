@@ -345,6 +345,13 @@ func (v *Worker) Produce() {
 		rlimiter = rate.NewLimiter(rate.Limit(v.config.RateLimitBps), v.config.RateLimitBps)
 	}
 
+	// Calculate encoded size for later use in rate limiting
+	messageBodySize := binary.Size(MessageBody{
+		Token:   0,
+		SentAt:  time.Now().UnixMicro(),
+		Aborted: false,
+	})
+
 loop:
 	for {
 		// Drop out if signalled to stop
@@ -401,21 +408,21 @@ loop:
 			aborted = false
 		}
 
+		if rlimiter != nil {
+			rlimiter.WaitN(context.Background(), messageBodySize+len(v.payload))
+		}
+
 		sentAt := time.Now()
 		message := MessageBody{
 			Token:   token,
 			SentAt:  sentAt.UnixMicro(),
 			Aborted: aborted,
 		}
+
 		var messageBytes bytes.Buffer
 		err := binary.Write(&messageBytes, binary.BigEndian, message)
-		messageBytes.Write(v.payload)
 		util.Chk(err, "Serializing message")
-
-		if rlimiter != nil {
-			rlimiter.WaitN(context.Background(), messageBytes.Len())
-		}
-
+		messageBytes.Write(v.payload)
 		r = kgo.KeySliceRecord(key.Bytes(), messageBytes.Bytes())
 
 		handler := func(r *kgo.Record, err error) {
