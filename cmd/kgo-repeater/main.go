@@ -185,7 +185,7 @@ func main() {
 
 	mux.HandleFunc("/print_stack", func(w http.ResponseWriter, r *http.Request) {
 		log.Infof("Printing stack on remote request:")
-		pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
+		pprof.Lookup("goroutine").WriteTo(os.Stdout, 2)
 	})
 
 	mux.HandleFunc("/reset", func(w http.ResponseWriter, r *http.Request) {
