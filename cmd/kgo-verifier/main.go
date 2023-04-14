@@ -175,7 +175,7 @@ func main() {
 				log.Infof("Setting a timeout of %v seconds to print the stack trace", timeoutSec)
 				go func() {
 					time.Sleep(time.Duration(timeoutSec) * time.Second)
-					pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
+					pprof.Lookup("goroutine").WriteTo(os.Stdout, 2)
 				}()
 			} else {
 				log.Warn("unable to parse timeout query param, skipping printing stack trace logs")
