@@ -129,6 +129,8 @@ type ProducerWorkerStatus struct {
 	// (indicates retries/resends)
 	BadOffsets int64 `json:"bad_offsets"`
 
+	MaxOffsetsProduced map[int32]int64 `json:"max_offsets_produced"`
+
 	// How many times did we restart the producer loop?
 	Restarts int64 `json:"restarts"`
 
@@ -146,7 +148,7 @@ type ProducerWorkerStatus struct {
 	latency metrics.Histogram
 	Latency worker.HistogramSummary `json:"latency"`
 
-	Active bool `json:"latency"`
+	Active bool `json:"active"`
 
 	lock sync.Mutex
 
@@ -156,16 +158,31 @@ type ProducerWorkerStatus struct {
 
 func NewProducerWorkerStatus(topic string) ProducerWorkerStatus {
 	return ProducerWorkerStatus{
-		Topic:          topic,
-		lastCheckpoint: time.Now(),
-		latency:        metrics.NewHistogram(metrics.NewExpDecaySample(1024, 0.015)),
+		Topic:              topic,
+		MaxOffsetsProduced: make(map[int32]int64),
+		lastCheckpoint:     time.Now(),
+		latency:            metrics.NewHistogram(metrics.NewExpDecaySample(1024, 0.015)),
 	}
 }
 
-func (self *ProducerWorkerStatus) OnAcked() {
+func (self *ProducerWorkerStatus) OnAcked(Partition int32, Offset int64) {
 	self.lock.Lock()
 	defer self.lock.Unlock()
 	self.Acked += 1
+
+	currentMax, present := self.MaxOffsetsProduced[Partition]
+	if present {
+		if currentMax < Offset {
+			expected := currentMax + 1
+			if Offset != expected {
+				log.Warnf("Gap detected in produced offsets. Expected %d, but got %d", expected, Offset)
+			}
+
+			self.MaxOffsetsProduced[Partition] = Offset
+		}
+	} else {
+		self.MaxOffsetsProduced[Partition] = Offset
+	}
 }
 
 func (self *ProducerWorkerStatus) OnBadOffset() {
@@ -315,7 +332,7 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 				log.Debugf("errored = %b", errored)
 			} else {
 				ackLatency := time.Now().Sub(sentAt)
-				pw.Status.OnAcked()
+				pw.Status.OnAcked(r.Partition, r.Offset)
 				pw.Status.latency.Update(ackLatency.Microseconds())
 				log.Debugf("Wrote partition %d at %d", r.Partition, r.Offset)
 				pw.validOffsets.Insert(r.Partition, r.Offset)

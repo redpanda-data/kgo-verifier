@@ -13,7 +13,8 @@ import (
 
 func NewValidatorStatus() ValidatorStatus {
 	return ValidatorStatus{
-		lastCheckpoint: time.Now(),
+		MaxOffsetsConsumed: make(map[int32]int64),
+		lastCheckpoint:     time.Now(),
 	}
 }
 
@@ -32,6 +33,9 @@ type ValidatorStatus struct {
 	// offsets where retries happened or where unrelated
 	// data was written to the topic)
 	OutOfScopeInvalidReads int64 `json:"out_of_scope_invalid_reads"`
+
+	// The highest valid offset consumed throughout the consumer's lifetime
+	MaxOffsetsConsumed map[int32]int64 `json:"max_offsets_consumed"`
 
 	// Concurrent access happens when doing random reads
 	// with multiple reader fibers
@@ -60,6 +64,24 @@ func (cs *ValidatorStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffse
 	} else {
 		cs.ValidReads += 1
 		log.Debugf("Read OK (%s) on p=%d at o=%d", r.Headers[0].Value, r.Partition, r.Offset)
+
+        if cs.MaxOffsetsConsumed == nil {
+            cs.MaxOffsetsConsumed = make(map[int32]int64)
+        }
+
+		currentMax, present := cs.MaxOffsetsConsumed[r.Partition]
+		if present {
+			if currentMax < r.Offset {
+				expected := currentMax + 1
+				if r.Offset != expected {
+					log.Warnf("Gap detected in consumed offsets. Expected %d, but got %d", expected, r.Offset)
+				}
+
+				cs.MaxOffsetsConsumed[r.Partition] = r.Offset
+			}
+		} else {
+			cs.MaxOffsetsConsumed[r.Partition] = r.Offset
+		}
 	}
 
 	if time.Since(cs.lastCheckpoint) > time.Second*5 {
