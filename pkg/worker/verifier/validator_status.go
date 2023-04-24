@@ -33,6 +33,9 @@ type ValidatorStatus struct {
 	// data was written to the topic)
 	OutOfScopeInvalidReads int64 `json:"out_of_scope_invalid_reads"`
 
+    // The highest valid offset consumed throughout the consumer's lifetime
+    MaxOffsetConsumed int64 `json:"max_offset_consumed"`
+
 	// Concurrent access happens when doing random reads
 	// with multiple reader fibers
 	lock sync.Mutex
@@ -56,6 +59,15 @@ func (cs *ValidatorStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffse
 		} else {
 			cs.OutOfScopeInvalidReads += 1
 			log.Infof("Ignoring read validation at offset outside valid range %s/%d %d", r.Topic, r.Partition, r.Offset)
+
+            if cs.MaxOffsetConsumed < r.Offset {
+                expected := cs.MaxOffsetConsumed + 1
+                if r.Offset != expected {
+                    log.Warnf("Gap detected in consumed offsets. Expected %d, but got %d", expected, r.Offset)
+                }
+
+                cs.MaxOffsetConsumed = r.Offset
+            }
 		}
 	} else {
 		cs.ValidReads += 1
