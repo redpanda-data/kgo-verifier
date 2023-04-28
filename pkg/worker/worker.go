@@ -1,8 +1,10 @@
 package worker
 
 import (
+	"crypto/tls"
 	"fmt"
 	"math/rand"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -143,6 +145,7 @@ type WorkerConfig struct {
 	BatchMaxbytes      uint
 	SaslUser           string
 	SaslPass           string
+	UseTls             bool
 	Transactions       bool
 
 	// A kafka `compression.type`, or `mixed` to use a random one for each worker (requires
@@ -234,6 +237,11 @@ func (wc *WorkerConfig) MakeKgoOpts() []kgo.Opt {
 		auth := auth_mech.AsSha256Mechanism()
 		opts = append(opts,
 			kgo.SASL(auth))
+	}
+
+	if wc.UseTls {
+		tlsDialer := &tls.Dialer{NetDialer: &net.Dialer{Timeout: 10 * time.Second}}
+		opts = append(opts, kgo.Dialer(tlsDialer.DialContext))
 	}
 
 	if wc.Trace {

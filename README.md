@@ -98,8 +98,8 @@ matches offset) or not.
 
 ### Usage
 
-- Brokers must not use TLS (in BYOC that means run this script inside your k8s cluster
-  and refer to brokers by pod IP)
+- Use of TLS is allowed (through `--enable-tls`) with the caveat that the certificate
+  must be signed by a known/trusted CA (so no self-signed or self generated CAs)
 
 #### 1. Quick produce+consume smoke test: produce and then consume in the same process
 
