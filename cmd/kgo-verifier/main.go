@@ -39,6 +39,7 @@ var (
 	topic               = flag.String("topic", "", "topic to produce to or consume from")
 	username            = flag.String("username", "", "SASL username")
 	password            = flag.String("password", "", "SASL password")
+	enableTls           = flag.Bool("enable-tls", false, "Enables use of TLS")
 	mSize               = flag.Int("msg_size", 16384, "Size of messages to produce")
 	pCount              = flag.Int("produce_msgs", 0, "Number of messages to produce")
 	cCount              = flag.Int("rand_read_msgs", 0, "Number of validation reads to do from each random reader")
@@ -76,6 +77,7 @@ func makeWorkerConfig() worker.WorkerConfig {
 		BatchMaxbytes:       uint(*batchMaxBytes),
 		SaslUser:            *username,
 		SaslPass:            *password,
+		UseTls:              *enableTls,
 		Name:                *name,
 		Transactions:        *useTransactions,
 		CompressionType:     *compressionType,
