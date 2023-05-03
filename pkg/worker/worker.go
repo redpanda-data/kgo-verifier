@@ -254,7 +254,7 @@ func (wc *WorkerConfig) MakeKgoOpts() []kgo.Opt {
 }
 
 func NewWorkerConfig(name string, brokers string, trace bool, topic string, linger time.Duration, maxBufferedRecords uint, transactions bool,
-	compressionType string, commpressiblePayload bool) WorkerConfig {
+	compressionType string, commpressiblePayload bool, username string, password string, useTls bool) WorkerConfig {
 	return WorkerConfig{
 		Name:                name,
 		Brokers:             brokers,
@@ -262,8 +262,9 @@ func NewWorkerConfig(name string, brokers string, trace bool, topic string, ling
 		Topic:               topic,
 		Linger:              linger,
 		MaxBufferedRecords:  maxBufferedRecords,
-		SaslUser:            "",
-		SaslPass:            "",
+		SaslUser:            username,
+		SaslPass:            password,
+		UseTls:              useTls,
 		Transactions:        transactions,
 		CompressionType:     compressionType,
 		CompressiblePayload: commpressiblePayload,

@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -21,11 +23,15 @@ import (
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/sasl/scram"
 )
 
 var (
 	debug              = flag.Bool("debug", false, "Enable verbose logging")
 	trace              = flag.Bool("trace", false, "Enable ultra-verbose client logging")
+	username           = flag.String("username", "", "SASL username")
+	password           = flag.String("password", "", "SASL password")
+	enableTls          = flag.Bool("enable-tls", false, "Enable use of TLS")
 	brokers            = flag.String("brokers", "localhost:9092", "comma delimited list of brokers")
 	topic              = flag.String("topic", "", "topic to produce to or consume from")
 	linger             = flag.Duration("linger", 0, "if non-zero, linger to use when producing")
@@ -53,6 +59,20 @@ func NewAdmin() (*kadm.Client, error) {
 
 	opts := []kgo.Opt{
 		kgo.SeedBrokers(strings.Split(*brokers, ",")...),
+	}
+
+	if len(*username) > 0 {
+		auth_mech := scram.Auth{
+			User: *username,
+			Pass: *password,
+		}
+		auth := auth_mech.AsSha256Mechanism()
+		opts = append(opts, kgo.SASL(auth))
+	}
+
+	if *enableTls {
+		tlsDialer := &tls.Dialer{NetDialer: &net.Dialer{Timeout: 10 * time.Second}}
+		opts = append(opts, kgo.Dialer(tlsDialer.DialContext))
 	}
 	kgoClient, err := kgo.NewClient(opts...)
 	if err != nil {
@@ -83,9 +103,12 @@ func main() {
 	}
 
 	log.Info("Getting topic metadata...")
-	opts := []kgo.Opt{
-		kgo.SeedBrokers(strings.Split(*brokers, ",")...),
-	}
+	wConfig := worker.NewWorkerConfig(
+		"kgo", *brokers, *trace, *topic, *linger, *maxBufferedRecords, *useTransactions, *compressionType, *compressiblePayload, *username, *password, *enableTls)
+	opts := wConfig.MakeKgoOpts()
+	opts = append(opts, []kgo.Opt{
+		kgo.ProducerBatchMaxBytes(1024 * 1024),
+	}...)
 	client, err := kgo.NewClient(opts...)
 	util.Chk(err, "Error creating kafka client: %v", err)
 
@@ -136,7 +159,7 @@ func main() {
 		name := fmt.Sprintf("%s_%d_w_%d", hostName, pid, i)
 		log.Debugf("Preparing worker %s...", name)
 		wConfig := worker.NewWorkerConfig(
-			name, *brokers, *trace, *topic, *linger, *maxBufferedRecords, *useTransactions, *compressionType, *compressiblePayload)
+			name, *brokers, *trace, *topic, *linger, *maxBufferedRecords, *useTransactions, *compressionType, *compressiblePayload, *username, *password, *enableTls)
 		config := repeater.NewRepeaterConfig(wConfig, *group, partitions, *keys, *payloadSize, dataInFlightPerWorker, rateLimitPerWorker)
 		lv := repeater.NewWorker(config)
 		if *useTransactions {
