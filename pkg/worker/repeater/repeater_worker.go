@@ -291,7 +291,6 @@ func (v *Worker) Init() {
 
 		opts = append(opts, []kgo.Opt{
 			kgo.ProducerBatchMaxBytes(1024 * 1024),
-			kgo.ProducerBatchCompression(kgo.NoCompression()),
 			kgo.RecordPartitioner(kgo.StickyKeyPartitioner(nil)),
 		}...)
 
