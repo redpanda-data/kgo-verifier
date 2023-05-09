@@ -120,6 +120,7 @@ type LatencyReport struct {
 }
 
 type WorkerStatus struct {
+	Topic    string        `json:"topic"`
 	Produced int64         `json:"produced"`
 	Consumed int64         `json:"consumed"`
 	Enqueued int           `json:"enqueued"`
@@ -133,6 +134,7 @@ type WorkerStatus struct {
  */
 func (v *Worker) Status() WorkerStatus {
 	return WorkerStatus{
+		Topic:    v.config.workerCfg.Topic,
 		Produced: v.totalProduced,
 		Consumed: v.totalConsumed,
 		Enqueued: len(v.pending),

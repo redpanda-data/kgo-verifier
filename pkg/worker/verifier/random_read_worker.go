@@ -26,6 +26,7 @@ type RandomReadWorker struct {
 }
 
 type RandomWorkerStatus struct {
+	Topic     string          `json:"topic"`
 	Validator ValidatorStatus `json:"validator"`
 	Active    bool            `json:"active"`
 	Errors    int             `json:"errors"`
@@ -43,7 +44,7 @@ func NewRandomReadConfig(wc worker.WorkerConfig, name string, nPartitions int32,
 func NewRandomReadWorker(cfg RandomReadConfig) RandomReadWorker {
 	return RandomReadWorker{
 		config: cfg,
-		Status: RandomWorkerStatus{},
+		Status: RandomWorkerStatus{Topic: cfg.workerCfg.Topic},
 	}
 }
 
@@ -170,7 +171,7 @@ func (w *RandomReadWorker) Wait() error {
 }
 
 func (rrw *RandomReadWorker) ResetStats() {
-	rrw.Status = RandomWorkerStatus{}
+	rrw.Status = RandomWorkerStatus{Topic: rrw.config.workerCfg.Topic}
 }
 
 func (rrw *RandomReadWorker) GetStatus() interface{} {
