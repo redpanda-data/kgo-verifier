@@ -30,6 +30,7 @@ func NewSeqReadConfig(
 }
 
 type SeqWorkerStatus struct {
+	Topic     string          `json:"topic"`
 	Validator ValidatorStatus `json:"validator"`
 	Active    bool            `json:"active"`
 	Errors    int             `json:"errors"`
@@ -43,7 +44,7 @@ type SeqReadWorker struct {
 func NewSeqReadWorker(cfg SeqReadConfig) SeqReadWorker {
 	return SeqReadWorker{
 		config: cfg,
-		Status: SeqWorkerStatus{},
+		Status: SeqWorkerStatus{Topic: cfg.workerCfg.Topic},
 	}
 }
 
@@ -184,7 +185,7 @@ func (srw *SeqReadWorker) sequentialReadInner(startAt []int64, upTo []int64) ([]
 }
 
 func (srw *SeqReadWorker) ResetStats() {
-	srw.Status = SeqWorkerStatus{}
+	srw.Status = SeqWorkerStatus{Topic: srw.config.workerCfg.Topic}
 }
 
 func (srw *SeqReadWorker) GetStatus() interface{} {

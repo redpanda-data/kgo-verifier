@@ -36,6 +36,7 @@ func NewGroupReadConfig(
 }
 
 type GroupWorkerStatus struct {
+	Topic     string          `json:"topic"`
 	Validator ValidatorStatus `json:"validator"`
 	Active    bool            `json:"active"`
 	Errors    int             `json:"errors"`
@@ -50,7 +51,7 @@ type GroupReadWorker struct {
 func NewGroupReadWorker(cfg GroupReadConfig) GroupReadWorker {
 	return GroupReadWorker{
 		config: cfg,
-		Status: GroupWorkerStatus{},
+		Status: GroupWorkerStatus{Topic: cfg.workerCfg.Topic},
 	}
 }
 
@@ -250,7 +251,7 @@ func (grw *GroupReadWorker) consumerGroupReadInner(
 }
 
 func (grw *GroupReadWorker) ResetStats() {
-	grw.Status = GroupWorkerStatus{}
+	grw.Status = GroupWorkerStatus{Topic: grw.config.workerCfg.Topic}
 }
 
 func (grw *GroupReadWorker) GetStatus() interface{} {

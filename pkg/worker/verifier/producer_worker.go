@@ -66,7 +66,7 @@ type ProducerWorker struct {
 func NewProducerWorker(cfg ProducerConfig) ProducerWorker {
 	return ProducerWorker{
 		config:          cfg,
-		Status:          NewProducerWorkerStatus(),
+		Status:          NewProducerWorkerStatus(cfg.workerCfg.Topic),
 		validOffsets:    LoadTopicOffsetRanges(cfg.workerCfg.Topic, cfg.nPartitions),
 		payload:         cfg.valueGenerator.Generate(),
 		fakeTimestampMs: cfg.fakeTimestampMs,
@@ -116,6 +116,8 @@ func (pw *ProducerWorker) newRecord(producerId int, sequence int64) *kgo.Record 
 }
 
 type ProducerWorkerStatus struct {
+	// Topic being produced to
+	Topic string `json:"topic"`
 	// How many messages did we try to transmit?
 	Sent int64 `json:"sent"`
 
@@ -152,8 +154,9 @@ type ProducerWorkerStatus struct {
 	lastCheckpoint time.Time
 }
 
-func NewProducerWorkerStatus() ProducerWorkerStatus {
+func NewProducerWorkerStatus(topic string) ProducerWorkerStatus {
 	return ProducerWorkerStatus{
+		Topic:          topic,
 		lastCheckpoint: time.Now(),
 		latency:        metrics.NewHistogram(metrics.NewExpDecaySample(1024, 0.015)),
 	}
@@ -368,7 +371,7 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 }
 
 func (pw *ProducerWorker) ResetStats() {
-	pw.Status = NewProducerWorkerStatus()
+	pw.Status = NewProducerWorkerStatus(pw.config.workerCfg.Topic)
 }
 
 func (pw *ProducerWorker) GetStatus() interface{} {
