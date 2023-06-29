@@ -2,6 +2,7 @@ package verifier
 
 import (
 	"context"
+	"sync"
 
 	worker "github.com/redpanda-data/kgo-verifier/pkg/worker"
 	log "github.com/sirupsen/logrus"
@@ -188,6 +189,6 @@ func (srw *SeqReadWorker) ResetStats() {
 	srw.Status = SeqWorkerStatus{Topic: srw.config.workerCfg.Topic}
 }
 
-func (srw *SeqReadWorker) GetStatus() interface{} {
-	return &srw.Status
+func (srw *SeqReadWorker) GetStatus() (interface{}, *sync.Mutex) {
+	return &srw.Status, &srw.Status.Validator.lock
 }

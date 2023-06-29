@@ -144,11 +144,23 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
 		var results []interface{}
+		var locks []*sync.Mutex
 		for _, v := range workers {
-			results = append(results, v.GetStatus())
+			status, lock := v.GetStatus()
+			results = append(results, status)
+			locks = append(locks, lock)
+		}
+
+		for _, lock := range locks {
+			lock.Lock()
 		}
 
 		serialized, err := json.MarshalIndent(results, "", "  ")
+
+		for _, lock := range locks {
+			lock.Unlock()
+		}
+
 		util.Chk(err, "Status serialization error")
 
 		w.WriteHeader(http.StatusOK)

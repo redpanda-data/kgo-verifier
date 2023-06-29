@@ -195,7 +195,12 @@ func (pw *ProducerWorker) produceCheckpoint() {
 	err := pw.validOffsets.Store()
 	util.Chk(err, "Error writing offset map: %v", err)
 
-	data, err := json.Marshal(pw.Status)
+	status, lock := pw.GetStatus()
+
+	lock.Lock()
+	data, err := json.Marshal(status)
+	lock.Unlock()
+
 	util.Chk(err, "Status serialization error")
 	log.Infof("Producer status: %s", data)
 }
@@ -391,9 +396,9 @@ func (pw *ProducerWorker) ResetStats() {
 	pw.Status = NewProducerWorkerStatus(pw.config.workerCfg.Topic)
 }
 
-func (pw *ProducerWorker) GetStatus() interface{} {
+func (pw *ProducerWorker) GetStatus() (interface{}, *sync.Mutex) {
 	// Update public summary from private statustics
 	pw.Status.Latency = worker.SummarizeHistogram(&pw.Status.latency)
 
-	return &pw.Status
+	return &pw.Status, &pw.Status.lock
 }
