@@ -65,9 +65,9 @@ func (cs *ValidatorStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffse
 		cs.ValidReads += 1
 		log.Debugf("Read OK (%s) on p=%d at o=%d", r.Headers[0].Value, r.Partition, r.Offset)
 
-        if cs.MaxOffsetsConsumed == nil {
-            cs.MaxOffsetsConsumed = make(map[int32]int64)
-        }
+		if cs.MaxOffsetsConsumed == nil {
+			cs.MaxOffsetsConsumed = make(map[int32]int64)
+		}
 
 		currentMax, present := cs.MaxOffsetsConsumed[r.Partition]
 		if present {

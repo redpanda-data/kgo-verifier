@@ -20,28 +20,30 @@ import (
 )
 
 type ProducerConfig struct {
-	workerCfg         worker.WorkerConfig
-	name              string
-	nPartitions       int32
-	messageSize       int
-	messageCount      int
-	fakeTimestampMs   int64
-	rateLimitBytes    int
-	keySetCardinality int
-	valueGenerator    worker.ValueGenerator
+	workerCfg           worker.WorkerConfig
+	name                string
+	nPartitions         int32
+	messageSize         int
+	messageCount        int
+	fakeTimestampMs     int64
+	fakeTimestampStepMs int64
+	rateLimitBytes      int
+	keySetCardinality   int
+	valueGenerator      worker.ValueGenerator
 }
 
 func NewProducerConfig(wc worker.WorkerConfig, name string, nPartitions int32,
-	messageSize int, messageCount int, fakeTimestampMs int64, rateLimitBytes int, keySetCardinality int) ProducerConfig {
+	messageSize int, messageCount int, fakeTimestampMs int64, fakeTimestampStepMs int64, rateLimitBytes int, keySetCardinality int) ProducerConfig {
 	return ProducerConfig{
-		workerCfg:         wc,
-		name:              name,
-		nPartitions:       nPartitions,
-		messageCount:      messageCount,
-		messageSize:       messageSize,
-		fakeTimestampMs:   fakeTimestampMs,
-		rateLimitBytes:    rateLimitBytes,
-		keySetCardinality: keySetCardinality,
+		workerCfg:           wc,
+		name:                name,
+		nPartitions:         nPartitions,
+		messageCount:        messageCount,
+		messageSize:         messageSize,
+		fakeTimestampMs:     fakeTimestampMs,
+		fakeTimestampStepMs: fakeTimestampStepMs,
+		rateLimitBytes:      rateLimitBytes,
+		keySetCardinality:   keySetCardinality,
 		valueGenerator: worker.ValueGenerator{
 			PayloadSize:  uint64(messageSize),
 			Compressible: wc.CompressiblePayload,
@@ -50,10 +52,9 @@ func NewProducerConfig(wc worker.WorkerConfig, name string, nPartitions int32,
 }
 
 type ProducerWorker struct {
-	config          ProducerConfig
-	Status          ProducerWorkerStatus
-	validOffsets    TopicOffsetRanges
-	fakeTimestampMs int64
+	config       ProducerConfig
+	Status       ProducerWorkerStatus
+	validOffsets TopicOffsetRanges
 
 	payload []byte
 
@@ -65,11 +66,10 @@ type ProducerWorker struct {
 
 func NewProducerWorker(cfg ProducerConfig) ProducerWorker {
 	return ProducerWorker{
-		config:          cfg,
-		Status:          NewProducerWorkerStatus(cfg.workerCfg.Topic),
-		validOffsets:    LoadTopicOffsetRanges(cfg.workerCfg.Topic, cfg.nPartitions),
-		payload:         cfg.valueGenerator.Generate(),
-		fakeTimestampMs: cfg.fakeTimestampMs,
+		config:       cfg,
+		Status:       NewProducerWorkerStatus(cfg.workerCfg.Topic),
+		validOffsets: LoadTopicOffsetRanges(cfg.workerCfg.Topic, cfg.nPartitions),
+		payload:      cfg.valueGenerator.Generate(),
 	}
 }
 
@@ -108,9 +108,9 @@ func (pw *ProducerWorker) newRecord(producerId int, sequence int64) *kgo.Record 
 
 	r.Headers = append(r.Headers, kgo.RecordHeader{Key: "KGO_VERIFIER_RECORD_ID", Value: header_key.Bytes()})
 
-	if pw.fakeTimestampMs != -1 {
-		r.Timestamp = time.Unix(0, pw.fakeTimestampMs*1000000)
-		pw.fakeTimestampMs += 1
+	if pw.config.fakeTimestampMs != -1 {
+		r.Timestamp = time.Unix(0, pw.config.fakeTimestampMs*1000000)
+		pw.config.fakeTimestampMs += pw.config.fakeTimestampStepMs
 	}
 	return r
 }
