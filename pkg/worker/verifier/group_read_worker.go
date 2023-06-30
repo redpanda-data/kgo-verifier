@@ -254,6 +254,6 @@ func (grw *GroupReadWorker) ResetStats() {
 	grw.Status = GroupWorkerStatus{Topic: grw.config.workerCfg.Topic}
 }
 
-func (grw *GroupReadWorker) GetStatus() interface{} {
-	return &grw.Status
+func (grw *GroupReadWorker) GetStatus() (interface{}, *sync.Mutex) {
+	return &grw.Status, &grw.Status.Validator.lock
 }

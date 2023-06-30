@@ -4,6 +4,7 @@ import (
 	"context"
 	"math/rand"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/redpanda-data/kgo-verifier/pkg/util"
@@ -174,6 +175,6 @@ func (rrw *RandomReadWorker) ResetStats() {
 	rrw.Status = RandomWorkerStatus{Topic: rrw.config.workerCfg.Topic}
 }
 
-func (rrw *RandomReadWorker) GetStatus() interface{} {
-	return &rrw.Status
+func (rrw *RandomReadWorker) GetStatus() (interface{}, *sync.Mutex) {
+	return &rrw.Status, &rrw.Status.Validator.lock
 }

@@ -55,6 +55,7 @@ var (
 	loop                = flag.Bool("loop", false, "For readers, run indefinitely until stopped via signal or HTTP call")
 	name                = flag.String("client-name", "kgo", "Name of kafka client")
 	fakeTimestampMs     = flag.Int64("fake-timestamp-ms", -1, "Producer: set artificial batch timestamps on an incrementing basis, starting from this number")
+	fakeTimestampStepMs = flag.Int64("fake-timestamp-step-ms", 1, "Producer: step size used to increment fake timestamp")
 	consumeTputMb       = flag.Int("consume-throughput-mb", -1, "Seq/group consumer: set max throughput in mb/s")
 	produceRateLimitBps = flag.Int("produce-throughput-bps", -1, "Producer: set max throughput in bytes/s")
 	keySetCardinality   = flag.Int("key-set-cardinality", -1, "Cardinality of a set of possible record keys (makes data compactible)")
@@ -144,11 +145,23 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
 		var results []interface{}
+		var locks []*sync.Mutex
 		for _, v := range workers {
-			results = append(results, v.GetStatus())
+			status, lock := v.GetStatus()
+			results = append(results, status)
+			locks = append(locks, lock)
+		}
+
+		for _, lock := range locks {
+			lock.Lock()
 		}
 
 		serialized, err := json.MarshalIndent(results, "", "  ")
+
+		for _, lock := range locks {
+			lock.Unlock()
+		}
+
 		util.Chk(err, "Status serialization error")
 
 		w.WriteHeader(http.StatusOK)
@@ -195,7 +208,7 @@ func main() {
 
 	if *pCount > 0 {
 		log.Info("Starting producer...")
-		pwc := verifier.NewProducerConfig(makeWorkerConfig(), "producer", nPartitions, *mSize, *pCount, *fakeTimestampMs, (*produceRateLimitBps), *keySetCardinality)
+		pwc := verifier.NewProducerConfig(makeWorkerConfig(), "producer", nPartitions, *mSize, *pCount, *fakeTimestampMs, *fakeTimestampStepMs, (*produceRateLimitBps), *keySetCardinality)
 		pw := verifier.NewProducerWorker(pwc)
 
 		if *useTransactions {

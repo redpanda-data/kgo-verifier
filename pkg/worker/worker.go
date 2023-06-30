@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	metrics "github.com/rcrowley/go-metrics"
@@ -90,7 +91,7 @@ func (ms *MessageStats) Reset() {
 }
 
 type Worker interface {
-	GetStatus() interface{}
+	GetStatus() (interface{}, *sync.Mutex)
 	ResetStats()
 }
 
