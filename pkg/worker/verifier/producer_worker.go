@@ -20,30 +20,32 @@ import (
 )
 
 type ProducerConfig struct {
-	workerCfg           worker.WorkerConfig
-	name                string
-	nPartitions         int32
-	messageSize         int
-	messageCount        int
-	fakeTimestampMs     int64
-	fakeTimestampStepMs int64
-	rateLimitBytes      int
-	keySetCardinality   int
-	valueGenerator      worker.ValueGenerator
+	workerCfg             worker.WorkerConfig
+	name                  string
+	nPartitions           int32
+	messageSize           int
+	messageCount          int
+	fakeTimestampMs       int64
+	fakeTimestampStepMs   int64
+	rateLimitBytes        int
+	keySetCardinality     int
+	messagesPerProducerId int
+	valueGenerator        worker.ValueGenerator
 }
 
 func NewProducerConfig(wc worker.WorkerConfig, name string, nPartitions int32,
-	messageSize int, messageCount int, fakeTimestampMs int64, fakeTimestampStepMs int64, rateLimitBytes int, keySetCardinality int) ProducerConfig {
+	messageSize int, messageCount int, fakeTimestampMs int64, fakeTimestampStepMs int64, rateLimitBytes int, keySetCardinality int, messagesPerProducerId int) ProducerConfig {
 	return ProducerConfig{
-		workerCfg:           wc,
-		name:                name,
-		nPartitions:         nPartitions,
-		messageCount:        messageCount,
-		messageSize:         messageSize,
-		fakeTimestampMs:     fakeTimestampMs,
-		fakeTimestampStepMs: fakeTimestampStepMs,
-		rateLimitBytes:      rateLimitBytes,
-		keySetCardinality:   keySetCardinality,
+		workerCfg:             wc,
+		name:                  name,
+		nPartitions:           nPartitions,
+		messageCount:          messageCount,
+		messageSize:           messageSize,
+		fakeTimestampMs:       fakeTimestampMs,
+		fakeTimestampStepMs:   fakeTimestampStepMs,
+		rateLimitBytes:        rateLimitBytes,
+		keySetCardinality:     keySetCardinality,
+		messagesPerProducerId: messagesPerProducerId,
 		valueGenerator: worker.ValueGenerator{
 			PayloadSize:  uint64(messageSize),
 			Compressible: wc.CompressiblePayload,
@@ -62,14 +64,16 @@ type ProducerWorker struct {
 	transactionsEnabled  bool
 	transactionSTMConfig worker.TransactionSTMConfig
 	transactionSTM       *worker.TransactionSTM
+	churnProducers       bool
 }
 
 func NewProducerWorker(cfg ProducerConfig) ProducerWorker {
 	return ProducerWorker{
-		config:       cfg,
-		Status:       NewProducerWorkerStatus(cfg.workerCfg.Topic),
-		validOffsets: LoadTopicOffsetRanges(cfg.workerCfg.Topic, cfg.nPartitions),
-		payload:      cfg.valueGenerator.Generate(),
+		config:         cfg,
+		Status:         NewProducerWorkerStatus(cfg.workerCfg.Topic),
+		validOffsets:   LoadTopicOffsetRanges(cfg.workerCfg.Topic, cfg.nPartitions),
+		payload:        cfg.valueGenerator.Generate(),
+		churnProducers: cfg.messagesPerProducerId > 0,
 	}
 }
 
@@ -310,6 +314,10 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 					nextOffset[i] += addedControlMarkers
 				}
 			}
+		}
+
+		if pw.churnProducers && pw.Status.Sent > 0 && pw.Status.Sent%int64(pw.config.messagesPerProducerId) == 0 {
+			break
 		}
 
 		expectOffset := nextOffset[p]
