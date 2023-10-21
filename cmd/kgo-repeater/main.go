@@ -219,6 +219,14 @@ func main() {
 		w.Write(make([]byte, 0))
 	})
 
+	mux.HandleFunc("/reset_clients", func(w http.ResponseWriter, r *http.Request) {
+		for _, v := range verifiers {
+			v.Rebuild()
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write(make([]byte, 0))
+	})
+
 	go http.ListenAndServe(fmt.Sprintf("0.0.0.0:%d", *remotePort), mux)
 
 	if !*remote {
