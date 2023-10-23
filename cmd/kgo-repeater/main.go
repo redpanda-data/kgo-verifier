@@ -219,7 +219,12 @@ func main() {
 		w.Write(make([]byte, 0))
 	})
 
-	go http.ListenAndServe(fmt.Sprintf("0.0.0.0:%d", *remotePort), mux)
+	go func() {
+		listenAddr := fmt.Sprintf("0.0.0.0:%d", *remotePort)
+		if err := http.ListenAndServe(listenAddr, mux); err != nil {
+			panic(fmt.Sprintf("failed to listen on %s: %v", listenAddr, err));
+		}
+	}();
 
 	if !*remote {
 		admin, err := NewAdmin()
