@@ -30,7 +30,7 @@ type ProducerConfig struct {
 	rateLimitBytes        int
 	keySetCardinality     int
 	messagesPerProducerId int
-	valueGenerator        worker.ValueGenerator
+	valueGenerator worker.ValueGenerator
 }
 
 func NewProducerConfig(wc worker.WorkerConfig, name string, nPartitions int32,

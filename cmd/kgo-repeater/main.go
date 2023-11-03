@@ -52,6 +52,7 @@ var (
 
 	compressionType     = flag.String("compression-type", "", "One of gzip, snappy, lz4, zstd, or 'mixed' to pick a random codec for each producer")
 	compressiblePayload = flag.Bool("compressible-payload", false, "If true, use a highly compressible payload instead of the default random payload")
+	acks                = flag.Int("acks", -1, "Producer ACKS, controlling durability")
 )
 
 // NewAdmin returns a franz-go admin client.
@@ -104,7 +105,7 @@ func main() {
 
 	log.Info("Getting topic metadata...")
 	wConfig := worker.NewWorkerConfig(
-		"kgo", *brokers, *trace, *topic, *linger, *maxBufferedRecords, *useTransactions, *compressionType, *compressiblePayload, *username, *password, *enableTls)
+		"kgo", *brokers, *trace, *topic, *linger, *maxBufferedRecords, *useTransactions, *compressionType, *compressiblePayload, *username, *password, *enableTls, *acks)
 	opts := wConfig.MakeKgoOpts()
 	opts = append(opts, []kgo.Opt{
 		kgo.ProducerBatchMaxBytes(1024 * 1024),
@@ -159,7 +160,7 @@ func main() {
 		name := fmt.Sprintf("%s_%d_w_%d", hostName, pid, i)
 		log.Debugf("Preparing worker %s...", name)
 		wConfig := worker.NewWorkerConfig(
-			name, *brokers, *trace, *topic, *linger, *maxBufferedRecords, *useTransactions, *compressionType, *compressiblePayload, *username, *password, *enableTls)
+			name, *brokers, *trace, *topic, *linger, *maxBufferedRecords, *useTransactions, *compressionType, *compressiblePayload, *username, *password, *enableTls, *acks)
 		config := repeater.NewRepeaterConfig(wConfig, *group, partitions, *keys, *payloadSize, dataInFlightPerWorker, rateLimitPerWorker)
 		lv := repeater.NewWorker(config)
 		if *useTransactions {
@@ -222,9 +223,9 @@ func main() {
 	go func() {
 		listenAddr := fmt.Sprintf("0.0.0.0:%d", *remotePort)
 		if err := http.ListenAndServe(listenAddr, mux); err != nil {
-			panic(fmt.Sprintf("failed to listen on %s: %v", listenAddr, err));
+			panic(fmt.Sprintf("failed to listen on %s: %v", listenAddr, err))
 		}
-	}();
+	}()
 
 	if !*remote {
 		admin, err := NewAdmin()

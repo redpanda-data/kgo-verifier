@@ -156,6 +156,8 @@ type WorkerConfig struct {
 	// If true, use a payload that compresses easily.  If false, use an
 	// incompressible payload.
 	CompressiblePayload bool
+
+	Acks int
 }
 
 func CompressionCodecFromString(s string) (kgo.CompressionCodec, error) {
@@ -190,6 +192,16 @@ func CompressionCodecFromString(s string) (kgo.CompressionCodec, error) {
 
 }
 
+func getAcks(ack_value int) kgo.Acks {
+	if ack_value == 0 {
+		return kgo.NoAck()
+	} else if ack_value == 1 {
+		return kgo.LeaderAck()
+	}
+
+	return kgo.AllISRAcks()
+}
+
 func (wc *WorkerConfig) MakeKgoOpts() []kgo.Opt {
 	opts := []kgo.Opt{
 		kgo.SeedBrokers(strings.Split(wc.Brokers, ",")...),
@@ -199,7 +211,10 @@ func (wc *WorkerConfig) MakeKgoOpts() []kgo.Opt {
 
 		kgo.ProducerBatchMaxBytes(int32(wc.BatchMaxbytes)),
 		kgo.MaxBufferedRecords(int(wc.MaxBufferedRecords)),
-		kgo.RequiredAcks(kgo.AllISRAcks()),
+		kgo.RequiredAcks(getAcks(wc.Acks)),
+	}
+	if wc.Acks != -1 {
+		opts = append(opts, kgo.DisableIdempotentWrite())
 	}
 
 	if wc.CompressionType != "" {
@@ -255,7 +270,7 @@ func (wc *WorkerConfig) MakeKgoOpts() []kgo.Opt {
 }
 
 func NewWorkerConfig(name string, brokers string, trace bool, topic string, linger time.Duration, maxBufferedRecords uint, transactions bool,
-	compressionType string, commpressiblePayload bool, username string, password string, useTls bool) WorkerConfig {
+	compressionType string, commpressiblePayload bool, username string, password string, useTls bool, acks int) WorkerConfig {
 	return WorkerConfig{
 		Name:                name,
 		Brokers:             brokers,
@@ -269,5 +284,6 @@ func NewWorkerConfig(name string, brokers string, trace bool, topic string, ling
 		Transactions:        transactions,
 		CompressionType:     compressionType,
 		CompressiblePayload: commpressiblePayload,
+		Acks:                acks,
 	}
 }

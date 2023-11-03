@@ -67,6 +67,7 @@ var (
 
 	compressionType     = flag.String("compression-type", "", "One of none, gzip, snappy, lz4, zstd, or 'mixed' to pick a random codec for each producer")
 	compressiblePayload = flag.Bool("compressible-payload", false, "If true, use a highly compressible payload instead of the default random payload")
+	acks                = flag.Int("acks", -1, "Producer ACKS, controlling durability")
 )
 
 func makeWorkerConfig() worker.WorkerConfig {
@@ -84,6 +85,7 @@ func makeWorkerConfig() worker.WorkerConfig {
 		Transactions:        *useTransactions,
 		CompressionType:     *compressionType,
 		CompressiblePayload: *compressiblePayload,
+		Acks:                *acks,
 	}
 
 	return c
@@ -208,9 +210,9 @@ func main() {
 	go func() {
 		listenAddr := fmt.Sprintf("0.0.0.0:%d", *remotePort)
 		if err := http.ListenAndServe(listenAddr, mux); err != nil {
-			panic(fmt.Sprintf("failed to listen on %s: %v", listenAddr, err));
+			panic(fmt.Sprintf("failed to listen on %s: %v", listenAddr, err))
 		}
-	}();
+	}()
 
 	if *pCount > 0 {
 		log.Info("Starting producer...")
