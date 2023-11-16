@@ -43,6 +43,9 @@ type ValidatorStatus struct {
 
 	// For emitting checkpoints on time intervals
 	lastCheckpoint time.Time
+
+	// Last consumed offset per partition. Used to assert monotonicity and check for gaps.
+	lastOffsetConsumed map[int32]int64
 }
 
 func (cs *ValidatorStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffsetRanges) {
@@ -62,32 +65,49 @@ func (cs *ValidatorStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffse
 			log.Infof("Ignoring read validation at offset outside valid range %s/%d %d", r.Topic, r.Partition, r.Offset)
 		}
 	} else {
-		cs.ValidReads += 1
-		log.Debugf("Read OK (%s) on p=%d at o=%d", r.Headers[0].Value, r.Partition, r.Offset)
-
-		if cs.MaxOffsetsConsumed == nil {
-			cs.MaxOffsetsConsumed = make(map[int32]int64)
-		}
-
-		currentMax, present := cs.MaxOffsetsConsumed[r.Partition]
+		currentMax, present := cs.lastOffsetConsumed[r.Partition]
 		if present {
 			if currentMax < r.Offset {
 				expected := currentMax + 1
 				if r.Offset != expected {
 					log.Warnf("Gap detected in consumed offsets. Expected %d, but got %d", expected, r.Offset)
 				}
-
-				cs.MaxOffsetsConsumed[r.Partition] = r.Offset
+			} else {
+				log.Fatalf("Out of order read. Max consumed offset(partition=%d)=%d; Current record offset=%d", r.Partition, currentMax, r.Offset)
 			}
-		} else {
-			cs.MaxOffsetsConsumed[r.Partition] = r.Offset
 		}
+		cs.recordOffset(r)
+
+		cs.ValidReads += 1
+		log.Debugf("Read OK (%s) on p=%d at o=%d", r.Headers[0].Value, r.Partition, r.Offset)
 	}
 
 	if time.Since(cs.lastCheckpoint) > time.Second*5 {
 		cs.Checkpoint()
 		cs.lastCheckpoint = time.Now()
 	}
+}
+
+func (cs *ValidatorStatus) recordOffset(r *kgo.Record) {
+	if cs.MaxOffsetsConsumed == nil {
+		cs.MaxOffsetsConsumed = make(map[int32]int64)
+	}
+	if cs.lastOffsetConsumed == nil {
+		cs.lastOffsetConsumed = make(map[int32]int64)
+	}
+
+	if r.Offset > cs.MaxOffsetsConsumed[r.Partition] {
+		cs.MaxOffsetsConsumed[r.Partition] = r.Offset
+	}
+
+	cs.lastOffsetConsumed[r.Partition] = r.Offset
+}
+
+func (cs *ValidatorStatus) ResetMonotonicityTestState() {
+	cs.lock.Lock()
+	defer cs.lock.Unlock()
+
+	cs.lastOffsetConsumed = make(map[int32]int64)
 }
 
 func (cs *ValidatorStatus) Checkpoint() {

@@ -70,9 +70,13 @@ func (srw *SeqReadWorker) Wait() error {
 			log.Warnf("Restarting reader for error %v", err)
 			// Loop around
 		} else {
-			return nil
+			break
 		}
 	}
+
+	srw.Status.Validator.ResetMonotonicityTestState()
+
+	return nil
 }
 
 func (srw *SeqReadWorker) sequentialReadInner(startAt []int64, upTo []int64) ([]int64, error) {

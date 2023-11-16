@@ -98,9 +98,11 @@ func (w *RandomReadWorker) Wait() error {
 
 	// Select a partition and location
 	ctxLog.Infof("Reading %d random offsets", w.config.readCount)
-
+	
 	i := 0
 	for i < readCount {
+		w.Status.Validator.ResetMonotonicityTestState()
+
 		p := rand.Int31n(w.config.nPartitions)
 		pStart := startOffsets[p]
 		pEnd := endOffsets[p]

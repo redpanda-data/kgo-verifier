@@ -175,6 +175,16 @@ func (grw *GroupReadWorker) Wait() error {
 					log.Warnf(
 						"fiber %v: restarting consumer group reader for error %v",
 						fiberId, err)
+
+					// Since we are consuming with a consumer group it is legal
+					// to read older offsets on next try.
+					//
+					// Note for maintainers: Consider implementing checkpointing
+					// on consumer group commits and reverting monotonicity test
+					// state up to last commit. This will further validate
+					// linearizability of offset commits.
+					grw.Status.Validator.ResetMonotonicityTestState()
+
 					// Loop around and retry
 				} else {
 					log.Infof("fiber %v: consumer group reader finished", fiberId)
@@ -187,6 +197,7 @@ func (grw *GroupReadWorker) Wait() error {
 
 	wg.Wait()
 	grw.Status.Validator.Checkpoint()
+	grw.Status.Validator.ResetMonotonicityTestState()
 	return nil
 }
 
