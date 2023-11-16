@@ -61,7 +61,7 @@ var (
 	keySetCardinality   = flag.Int("key-set-cardinality", -1, "Cardinality of a set of possible record keys (makes data compactible)")
 	msgsPerProducerId   = flag.Int("msgs-per-producer-id", -1, "Number of messages produced before creating new Producer Client.  (used to generate many producer ids)")
 
-	useTransactions      = flag.Bool("use-transactions", false, "Producer: use a transactional producer")
+	useTransactions      = flag.Bool("use-transactions", false, "Use a transactional producer. Consumer with ReadComitted isolation level.")
 	transactionAbortRate = flag.Float64("transaction-abort-rate", 0.0, "The probability that any given transaction should abort")
 	msgsPerTransaction   = flag.Uint("msgs-per-transaction", 1, "The number of messages that should be in a given transaction")
 
