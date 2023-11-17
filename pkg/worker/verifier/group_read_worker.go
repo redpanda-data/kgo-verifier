@@ -69,6 +69,8 @@ type ConsumerGroupOffsets struct {
 	curReadCount int
 	// max number of messages to consume
 	maxReadCount int
+	// number of times we consumed an offset which was earlier
+	resets []int64
 	// rate limiter
 	rlimiter *rate.Limiter
 }
@@ -106,6 +108,8 @@ func (cgs *ConsumerGroupOffsets) AddRecord(ctx context.Context, r *kgo.Record) {
 
 	if r.Offset > cgs.lastSeen[r.Partition] {
 		cgs.lastSeen[r.Partition] = r.Offset
+	} else if r.Offset < cgs.lastSeen[r.Partition] {
+		log.Warnf("Consumed offset reset. last seen: %d, current: %d", cgs.lastSeen[r.Partition], r.Offset)
 	}
 
 	if cgs.maxReadCount >= 0 && cgs.curReadCount >= cgs.maxReadCount {
@@ -239,6 +243,7 @@ func (grw *GroupReadWorker) consumerGroupReadInner(
 			log.Debugf(
 				"fiber %v: Consumer group read %s/%d o=%d...",
 				fiberId, grw.config.workerCfg.Topic, r.Partition, r.Offset)
+
 			grw.Status.Validator.ValidateRecord(r, &validRanges)
 			// Will cancel the context if we have read everything
 			cgOffsets.AddRecord(ctx, r)
