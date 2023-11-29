@@ -70,9 +70,13 @@ func (srw *SeqReadWorker) Wait() error {
 			log.Warnf("Restarting reader for error %v", err)
 			// Loop around
 		} else {
-			return nil
+			break
 		}
 	}
+
+	srw.Status.Validator.ResetMonotonicityTestState()
+
+	return nil
 }
 
 func (srw *SeqReadWorker) sequentialReadInner(startAt []int64, upTo []int64) ([]int64, error) {
@@ -119,10 +123,11 @@ func (srw *SeqReadWorker) sequentialReadInner(startAt []int64, upTo []int64) ([]
 	if srw.config.rateLimitBytes > 0 {
 		rlimiter = rate.NewLimiter(rate.Limit(srw.config.rateLimitBytes), srw.config.rateLimitBytes)
 	}
-	last_read := make([]int64, srw.config.nPartitions)
+
+	lwm := append([]int64{}, startAt...)
 
 	for {
-		log.Debugf("Calling PollFetches (last_read=%v status %s)", last_read, srw.Status.Validator.String())
+		log.Debugf("Calling PollFetches (lwm=%v status %s)", lwm, srw.Status.Validator.String())
 		fetches := client.PollFetches(context.Background())
 		log.Debugf("PollFetches returned %d fetches", len(fetches))
 
@@ -135,8 +140,8 @@ func (srw *SeqReadWorker) sequentialReadInner(startAt []int64, upTo []int64) ([]
 		if r_err != nil {
 			// This is not fatal: server is allowed to return an error, the loop outside
 			// this function will try again, picking up from last_read.
-			log.Warnf("Returning on fetch error %v, read up to %v", r_err, last_read)
-			return last_read, r_err
+			log.Warnf("Returning on fetch error %v, lwm %v", r_err, lwm)
+			return lwm, r_err
 		}
 
 		fetches.EachRecord(func(r *kgo.Record) {
@@ -146,8 +151,10 @@ func (srw *SeqReadWorker) sequentialReadInner(startAt []int64, upTo []int64) ([]
 
 			log.Debugf("Sequential read %s/%d o=%d...", srw.config.workerCfg.Topic, r.Partition, r.Offset)
 			curReadCount += 1
-			if r.Offset > last_read[r.Partition] {
-				last_read[r.Partition] = r.Offset
+
+			// Increment low watermark to skip the message on next try.
+			if r.Offset >= lwm[r.Partition] {
+				lwm[r.Partition] = r.Offset + 1
 			}
 
 			if r.Offset >= upTo[r.Partition]-1 {
@@ -179,10 +186,10 @@ func (srw *SeqReadWorker) sequentialReadInner(startAt []int64, upTo []int64) ([]
 		}
 	}
 
-	log.Infof("Sequential read complete up to %v (validator status %v)", last_read, srw.Status.Validator.String())
+	log.Infof("Sequential read complete up to %v (validator status %v)", lwm, srw.Status.Validator.String())
 	client.Close()
 
-	return last_read, nil
+	return lwm, nil
 }
 
 func (srw *SeqReadWorker) ResetStats() {

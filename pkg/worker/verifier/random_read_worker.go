@@ -98,9 +98,11 @@ func (w *RandomReadWorker) Wait() error {
 
 	// Select a partition and location
 	ctxLog.Infof("Reading %d random offsets", w.config.readCount)
-
+	
 	i := 0
 	for i < readCount {
+		w.Status.Validator.ResetMonotonicityTestState()
+
 		p := rand.Int31n(w.config.nPartitions)
 		pStart := startOffsets[p]
 		pEnd := endOffsets[p]
@@ -130,11 +132,11 @@ func (w *RandomReadWorker) Wait() error {
 		}
 
 		// Read one record
-		ctxLog.Debugf("Reading partition %d (%d-%d) at offset %d", p, pStart, pEnd, offset)
+		ctxLog.Debugf("Reading partition %d (%d-%d) at offset %s", p, pStart, pEnd, offset)
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 		defer cancel()
 		fetches := client.PollRecords(ctx, 1)
-		ctxLog.Debugf("Read done for partition %d (%d-%d) at offset %d", p, pStart, pEnd, offset)
+		ctxLog.Debugf("Read done for partition %d (%d-%d) at offset %s", p, pStart, pEnd, offset)
 		fetches.EachError(func(topic string, partition int32, e error) {
 			// In random read mode, we tolerate read errors: if the server is unavailable
 			// we will just proceed to read the next random offset.
@@ -147,7 +149,7 @@ func (w *RandomReadWorker) Wait() error {
 			w.Status.Validator.ValidateRecord(r, &validRanges)
 		})
 		if len(fetches.Records()) == 0 {
-			ctxLog.Errorf("Reloading offsets on empty response reading from partition %d at %d", p, offset)
+			ctxLog.Errorf("Reloading offsets on empty response reading from partition %d at %s", p, offset)
 
 			// If we get an empty response, it may be because the partition was prefix-truncated
 			// and we tried to read an out of range offset: handle this by re-loading our
