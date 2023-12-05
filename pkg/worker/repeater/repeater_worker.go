@@ -44,6 +44,7 @@ type MessageBody struct {
 
 type RepeaterConfig struct {
 	workerCfg      worker.WorkerConfig
+	Topics         []string
 	Group          string
 	KeySpace       worker.KeySpace
 	ValueGenerator worker.ValueGenerator
@@ -51,9 +52,10 @@ type RepeaterConfig struct {
 	RateLimitBps   int
 }
 
-func NewRepeaterConfig(cfg worker.WorkerConfig, group string, keys uint64, payloadSize uint64, dataInFlight uint64, rateLimitBps int) RepeaterConfig {
+func NewRepeaterConfig(cfg worker.WorkerConfig, topics []string, group string, keys uint64, payloadSize uint64, dataInFlight uint64, rateLimitBps int) RepeaterConfig {
 	return RepeaterConfig{
 		workerCfg:      cfg,
+		Topics:         topics,
 		Group:          group,
 		KeySpace:       worker.KeySpace{UniqueCount: keys},
 		ValueGenerator: worker.ValueGenerator{PayloadSize: payloadSize, Compressible: cfg.CompressiblePayload},
