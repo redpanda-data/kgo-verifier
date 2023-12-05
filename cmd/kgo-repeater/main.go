@@ -22,7 +22,6 @@ import (
 	repeater "github.com/redpanda-data/kgo-verifier/pkg/worker/repeater"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
-	"github.com/twmb/franz-go/pkg/kmsg"
 	"github.com/twmb/franz-go/pkg/sasl/scram"
 )
 
@@ -102,36 +101,12 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 
-	log.Info("Getting topic metadata...")
 	wConfig := worker.NewWorkerConfig(
 		"kgo", *brokers, *trace, *topic, *linger, *maxBufferedRecords, *useTransactions, *compressionType, *compressiblePayload, *username, *password, *enableTls)
 	opts := wConfig.MakeKgoOpts()
 	opts = append(opts, []kgo.Opt{
 		kgo.ProducerBatchMaxBytes(1024 * 1024),
 	}...)
-	client, err := kgo.NewClient(opts...)
-	util.Chk(err, "Error creating kafka client: %v", err)
-
-	var t kmsg.MetadataResponseTopic
-	{
-		req := kmsg.NewPtrMetadataRequest()
-		reqTopic := kmsg.NewMetadataRequestTopic()
-		reqTopic.Topic = kmsg.StringPtr(*topic)
-		req.Topics = append(req.Topics, reqTopic)
-
-		resp, err := req.RequestWith(context.Background(), client)
-		util.Chk(err, "unable to request topic metadata: %v", err)
-		if len(resp.Topics) != 1 {
-			util.Die("metadata response returned %d topics when we asked for 1", len(resp.Topics))
-		}
-		t = resp.Topics[0]
-	}
-	log.Info("Got topic metadata.")
-
-	partitions := make([]int32, len(t.Partitions))
-	for i, _ := range t.Partitions {
-		partitions[i] = int32(i)
-	}
 
 	dataInFlightPerWorker := (*initialDataMb * 1024 * 1024) / uint64(*workers)
 
@@ -160,7 +135,7 @@ func main() {
 		log.Debugf("Preparing worker %s...", name)
 		wConfig := worker.NewWorkerConfig(
 			name, *brokers, *trace, *topic, *linger, *maxBufferedRecords, *useTransactions, *compressionType, *compressiblePayload, *username, *password, *enableTls)
-		config := repeater.NewRepeaterConfig(wConfig, *group, partitions, *keys, *payloadSize, dataInFlightPerWorker, rateLimitPerWorker)
+		config := repeater.NewRepeaterConfig(wConfig, *group, *keys, *payloadSize, dataInFlightPerWorker, rateLimitPerWorker)
 		lv := repeater.NewWorker(config)
 		if *useTransactions {
 			tconfig := worker.NewTransactionSTMConfig(*transactionAbortRate, *msgsPerTransaction)
