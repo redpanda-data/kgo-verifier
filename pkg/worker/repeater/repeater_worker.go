@@ -44,19 +44,19 @@ type MessageBody struct {
 
 type RepeaterConfig struct {
 	workerCfg      worker.WorkerConfig
+	Topics         []string
 	Group          string
-	Partitions     []int32
 	KeySpace       worker.KeySpace
 	ValueGenerator worker.ValueGenerator
 	DataInFlight   uint64
 	RateLimitBps   int
 }
 
-func NewRepeaterConfig(cfg worker.WorkerConfig, group string, partitions []int32, keys uint64, payloadSize uint64, dataInFlight uint64, rateLimitBps int) RepeaterConfig {
+func NewRepeaterConfig(cfg worker.WorkerConfig, topics []string, group string, keys uint64, payloadSize uint64, dataInFlight uint64, rateLimitBps int) RepeaterConfig {
 	return RepeaterConfig{
 		workerCfg:      cfg,
+		Topics:         topics,
 		Group:          group,
-		Partitions:     partitions,
 		KeySpace:       worker.KeySpace{UniqueCount: keys},
 		ValueGenerator: worker.ValueGenerator{PayloadSize: payloadSize, Compressible: cfg.CompressiblePayload},
 		DataInFlight:   dataInFlight,
@@ -66,7 +66,7 @@ func NewRepeaterConfig(cfg worker.WorkerConfig, group string, partitions []int32
 
 /**
  * This Worker is a 'well behaved' client that limits the number
- * of messages in flight and spreads them uniformly across partitions.
+ * of messages in flight and spreads them uniformly across topics/partitions
  */
 type Worker struct {
 	lock sync.Mutex
@@ -120,7 +120,7 @@ type LatencyReport struct {
 }
 
 type WorkerStatus struct {
-	Topic    string        `json:"topic"`
+	Topics   []string      `json:"topics"`
 	Produced int64         `json:"produced"`
 	Consumed int64         `json:"consumed"`
 	Enqueued int           `json:"enqueued"`
@@ -134,7 +134,7 @@ type WorkerStatus struct {
  */
 func (v *Worker) Status() WorkerStatus {
 	return WorkerStatus{
-		Topic:    v.config.workerCfg.Topic,
+		Topics:   v.config.Topics,
 		Produced: v.totalProduced,
 		Consumed: v.totalConsumed,
 		Enqueued: len(v.pending),
@@ -232,7 +232,7 @@ func (v *Worker) ConsumeRecord(r *kgo.Record) {
 
 	v.totalConsumed += 1
 
-	log.Debugf("Consume %s got record on partition %d...", v.config.workerCfg.Name, r.Partition)
+	log.Debugf("Consume %s got record on topic %s partition %d...", v.config.workerCfg.Name, r.Topic, r.Partition)
 
 	message := MessageBody{}
 	err := binary.Read(bytes.NewReader(r.Value), binary.BigEndian, &message)
@@ -269,7 +269,7 @@ func (v *Worker) Init() {
 		opts := v.config.workerCfg.MakeKgoOpts()
 
 		opts = append(opts, []kgo.Opt{
-			kgo.ConsumeTopics(v.config.workerCfg.Topic),
+			kgo.ConsumeTopics(v.config.Topics...),
 			kgo.ConsumeResetOffset(kgo.NewOffset().AtEnd()),
 			kgo.ProducerBatchMaxBytes(1024 * 1024),
 			kgo.RecordPartitioner(kgo.StickyKeyPartitioner(nil)),
@@ -425,6 +425,9 @@ loop:
 		util.Chk(err, "Serializing message")
 		messageBytes.Write(v.payload)
 		r = kgo.KeySliceRecord(key.Bytes(), messageBytes.Bytes())
+
+		// Pick a random topic as a destination
+		r.Topic = v.config.Topics[rand.Intn(len(v.config.Topics))]
 
 		handler := func(r *kgo.Record, err error) {
 			// FIXME: error doesn't necessarily mean the write wasn't committed:

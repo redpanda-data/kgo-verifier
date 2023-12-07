@@ -22,7 +22,6 @@ import (
 	repeater "github.com/redpanda-data/kgo-verifier/pkg/worker/repeater"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
-	"github.com/twmb/franz-go/pkg/kmsg"
 	"github.com/twmb/franz-go/pkg/sasl/scram"
 )
 
@@ -34,6 +33,7 @@ var (
 	enableTls          = flag.Bool("enable-tls", false, "Enable use of TLS")
 	brokers            = flag.String("brokers", "localhost:9092", "comma delimited list of brokers")
 	topic              = flag.String("topic", "", "topic to produce to or consume from")
+	topics             = flag.String("topics", "", "topic(s) to produce to or consume from")
 	linger             = flag.Duration("linger", 0, "if non-zero, linger to use when producing")
 	maxBufferedRecords = flag.Uint("max-buffered-records", 1, "Producer buffer size: the default of 1 is makes roughly one event per batch, useful for measurement.  Set to something higher to make it easier to max out bandwidth.")
 	group              = flag.String("group", "", "consumer group")
@@ -102,36 +102,25 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 
-	log.Info("Getting topic metadata...")
+	var topicsList []string
+	if *topic != "" && *topics != "" {
+		panic("Arguments -topic and -topics cannot both have a value")
+	} else if *topic == "" && *topics == "" {
+		panic("One or more topics must be passed either via -topic or -topics")
+	} else if *topics != "" {
+		topicsList = strings.Split(*topics, ",")
+	} else {
+		/// For now -topic and -topics will behave the same way to not break
+		/// other programs in CI that will currently pass the -topic flag
+		topicsList = strings.Split(*topic, ",")
+	}
+
 	wConfig := worker.NewWorkerConfig(
-		"kgo", *brokers, *trace, *topic, *linger, *maxBufferedRecords, *useTransactions, *compressionType, *compressiblePayload, *username, *password, *enableTls)
+		"kgo", *brokers, *trace, topicsList[0], *linger, *maxBufferedRecords, *useTransactions, *compressionType, *compressiblePayload, *username, *password, *enableTls)
 	opts := wConfig.MakeKgoOpts()
 	opts = append(opts, []kgo.Opt{
 		kgo.ProducerBatchMaxBytes(1024 * 1024),
 	}...)
-	client, err := kgo.NewClient(opts...)
-	util.Chk(err, "Error creating kafka client: %v", err)
-
-	var t kmsg.MetadataResponseTopic
-	{
-		req := kmsg.NewPtrMetadataRequest()
-		reqTopic := kmsg.NewMetadataRequestTopic()
-		reqTopic.Topic = kmsg.StringPtr(*topic)
-		req.Topics = append(req.Topics, reqTopic)
-
-		resp, err := req.RequestWith(context.Background(), client)
-		util.Chk(err, "unable to request topic metadata: %v", err)
-		if len(resp.Topics) != 1 {
-			util.Die("metadata response returned %d topics when we asked for 1", len(resp.Topics))
-		}
-		t = resp.Topics[0]
-	}
-	log.Info("Got topic metadata.")
-
-	partitions := make([]int32, len(t.Partitions))
-	for i, _ := range t.Partitions {
-		partitions[i] = int32(i)
-	}
 
 	dataInFlightPerWorker := (*initialDataMb * 1024 * 1024) / uint64(*workers)
 
@@ -158,9 +147,13 @@ func main() {
 	for i := uint(0); i < *workers; i++ {
 		name := fmt.Sprintf("%s_%d_w_%d", hostName, pid, i)
 		log.Debugf("Preparing worker %s...", name)
+		// For now the Repeater program uses the topicsList passed to the RepeaterConfig
+		// so the Topic passed to the WorkerConfig is just a dummy value to prevent
+		// the many changes that would be needed to be made to the verifier program if
+		// it was refactored.
 		wConfig := worker.NewWorkerConfig(
-			name, *brokers, *trace, *topic, *linger, *maxBufferedRecords, *useTransactions, *compressionType, *compressiblePayload, *username, *password, *enableTls)
-		config := repeater.NewRepeaterConfig(wConfig, *group, partitions, *keys, *payloadSize, dataInFlightPerWorker, rateLimitPerWorker)
+			name, *brokers, *trace, topicsList[0], *linger, *maxBufferedRecords, *useTransactions, *compressionType, *compressiblePayload, *username, *password, *enableTls)
+		config := repeater.NewRepeaterConfig(wConfig, topicsList, *group, *keys, *payloadSize, dataInFlightPerWorker, rateLimitPerWorker)
 		lv := repeater.NewWorker(config)
 		if *useTransactions {
 			tconfig := worker.NewTransactionSTMConfig(*transactionAbortRate, *msgsPerTransaction)
