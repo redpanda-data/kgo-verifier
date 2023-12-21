@@ -236,9 +236,14 @@ func main() {
 		workers = append(workers, &srw)
 
 		firstPass := true
-		for firstPass || (len(lastPassChan) == 0 && *loop) {
+		lastPass := false
+		for firstPass || (!lastPass && *loop) {
 			log.Info("Starting sequential read pass")
 			firstPass = false
+			lastPass = len(lastPassChan) != 0
+			if lastPass {
+				log.Info("This will be the last pass")
+			}
 			waitErr := srw.Wait()
 			if waitErr != nil {
 				// Proceed around the loop, to be tolerant of e.g. kafka client
@@ -288,8 +293,13 @@ func main() {
 		workers = append(workers, &grw)
 
 		firstPass := true
-		for firstPass || (len(lastPassChan) == 0 && *loop) {
+		lastPass := false
+		for firstPass || (!lastPass && *loop) {
 			log.Info("Starting group read pass")
+			lastPass = len(lastPassChan) == 0
+			if lastPass {
+				log.Info("This will be the last pass")
+			}
 			firstPass = false
 			waitErr := grw.Wait()
 			util.Chk(waitErr, "Consumer error: %v", err)
