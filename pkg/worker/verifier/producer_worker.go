@@ -244,7 +244,6 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 	opts := pw.config.workerCfg.MakeKgoOpts()
 
 	opts = append(opts, []kgo.Opt{
-		kgo.RequiredAcks(kgo.AllISRAcks()),
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
 	}...)
 
@@ -337,18 +336,33 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 		handler := func(r *kgo.Record, err error) {
 			concurrent.Release(1)
 			util.Chk(err, "Produce failed: %v", err)
-			if expectOffset != r.Offset {
-				log.Warnf("Produced at unexpected offset %d (expected %d) on partition %d", r.Offset, expectOffset, r.Partition)
-				pw.Status.OnBadOffset()
-				bad_offsets <- BadOffset{r.Partition, r.Offset}
-				errored = true
-				log.Debugf("errored = %b", errored)
-			} else {
-				ackLatency := time.Now().Sub(sentAt)
+			if pw.config.workerCfg.Acks == kgo.AllISRAcks() {
+				if expectOffset != r.Offset {
+					log.Warnf("Produced at unexpected offset %d (expected %d) on partition %d", r.Offset, expectOffset, r.Partition)
+					pw.Status.OnBadOffset()
+					bad_offsets <- BadOffset{r.Partition, r.Offset}
+					errored = true
+					log.Debugf("errored = %v", errored)
+				}
+			}
+
+			if !errored {
+				ackLatency := time.Since(sentAt)
 				pw.Status.OnAcked(r.Partition, r.Offset)
 				pw.Status.latency.Update(ackLatency.Microseconds())
+				reset := pw.validOffsets.GetLastReset(r.Partition)
+				if reset != nil {
+					log.Infof("reset override expected: %d, current: %d, new expected: %d", expectOffset, r.Offset, expectOffset-(reset.Expected-reset.Actual))
+					expectOffset = expectOffset - (reset.Expected - reset.Actual)
+				}
+
 				log.Debugf("Wrote partition %d at %d", r.Partition, r.Offset)
+				if expectOffset != r.Offset {
+					log.Infof("Adding offset reset on partition %d, expected offset: %d, actual offset: %d", r.Partition, expectOffset, r.Offset)
+					pw.validOffsets.AddReset(r.Partition, expectOffset, r.Offset)
+				}
 				pw.validOffsets.Insert(r.Partition, r.Offset)
+
 			}
 			wg.Done()
 		}

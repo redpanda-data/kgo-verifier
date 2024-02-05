@@ -39,9 +39,14 @@ type OffsetRange struct {
 	Lower int64 // Inclusive
 	Upper int64 // Exclusive
 }
+type OffsetReset struct {
+	Expected int64
+	Actual   int64
+}
 
 type OffsetRanges struct {
 	Ranges []OffsetRange
+	Resets []OffsetReset
 }
 
 func (ors *OffsetRanges) Insert(o int64) {
@@ -66,6 +71,17 @@ func (ors *OffsetRanges) Insert(o int64) {
 		}
 	}
 }
+func (ors *OffsetRanges) AddReset(expected int64, actual int64) {
+	ors.Resets = append(ors.Resets, OffsetReset{Expected: expected, Actual: actual})
+}
+
+func (ors *OffsetRanges) GetLastReset() *OffsetReset {
+
+	if len(ors.Resets) > 0 {
+		return &ors.Resets[len(ors.Resets)-1]
+	}
+	return nil
+}
 
 func (ors *OffsetRanges) Contains(o int64) bool {
 	for _, r := range ors.Ranges {
@@ -84,6 +100,14 @@ type TopicOffsetRanges struct {
 
 func (tors *TopicOffsetRanges) Insert(p int32, o int64) {
 	tors.PartitionRanges[p].Insert(o)
+}
+
+func (tors *TopicOffsetRanges) AddReset(p int32, expected int64, actual int64) {
+	tors.PartitionRanges[p].AddReset(expected, actual)
+}
+
+func (tors *TopicOffsetRanges) GetLastReset(p int32) *OffsetReset {
+	return tors.PartitionRanges[p].GetLastReset()
 }
 
 func (tors *TopicOffsetRanges) Contains(p int32, o int64) bool {
