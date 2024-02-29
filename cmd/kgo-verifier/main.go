@@ -208,9 +208,9 @@ func main() {
 	go func() {
 		listenAddr := fmt.Sprintf("0.0.0.0:%d", *remotePort)
 		if err := http.ListenAndServe(listenAddr, mux); err != nil {
-			panic(fmt.Sprintf("failed to listen on %s: %v", listenAddr, err));
+			panic(fmt.Sprintf("failed to listen on %s: %v", listenAddr, err))
 		}
-	}();
+	}()
 
 	if *pCount > 0 {
 		log.Info("Starting producer...")
@@ -266,7 +266,12 @@ func main() {
 		}
 
 		firstPass := true
-		for firstPass || (len(lastPassChan) == 0 && *loop) {
+		lastPass := false
+		for firstPass || (!lastPass && *loop) {
+			lastPass = len(lastPassChan) != 0
+			if lastPass {
+				log.Info("This will be the last pass")
+			}
 			firstPass = false
 			for _, w := range randomWorkers {
 				wg.Add(1)
@@ -296,7 +301,7 @@ func main() {
 		lastPass := false
 		for firstPass || (!lastPass && *loop) {
 			log.Info("Starting group read pass")
-			lastPass = len(lastPassChan) == 0
+			lastPass = len(lastPassChan) != 0
 			if lastPass {
 				log.Info("This will be the last pass")
 			}
