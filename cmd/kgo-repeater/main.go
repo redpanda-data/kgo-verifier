@@ -45,6 +45,7 @@ var (
 	remotePort         = flag.Uint("remote-port", 7884, "Port for report control HTTP listener")
 	profile            = flag.String("profile", "", "Enable CPU profiling")
 	rateLimitBps       = flag.Int("rate-limit-bps", -1, "Bytes/second throttle (global, will be split equally between workers)")
+	acks               = flag.Int("acks", -1, "Requested Kafka ACKS level. Possible values are 1,-1, 0")
 
 	useTransactions      = flag.Bool("use-transactions", false, "Producer: use a transactional producer")
 	transactionAbortRate = flag.Float64("transaction-abort-rate", 0.0, "The probability that any given transaction should abort")
@@ -114,9 +115,14 @@ func main() {
 		/// other programs in CI that will currently pass the -topic flag
 		topicsList = strings.Split(*topic, ",")
 	}
+	kgoAcks, err := util.MakeAcks(*acks)
+
+	if err != nil {
+		log.Panicf("%x", err)
+	}
 
 	wConfig := worker.NewWorkerConfig(
-		"kgo", *brokers, *trace, topicsList[0], *linger, *maxBufferedRecords, *useTransactions, *compressionType, *compressiblePayload, *username, *password, *enableTls)
+		"kgo", *brokers, *trace, topicsList[0], *linger, *maxBufferedRecords, *useTransactions, *compressionType, *compressiblePayload, *username, *password, *enableTls, kgoAcks)
 	opts := wConfig.MakeKgoOpts()
 	opts = append(opts, []kgo.Opt{
 		kgo.ProducerBatchMaxBytes(1024 * 1024),
@@ -152,7 +158,7 @@ func main() {
 		// the many changes that would be needed to be made to the verifier program if
 		// it was refactored.
 		wConfig := worker.NewWorkerConfig(
-			name, *brokers, *trace, topicsList[0], *linger, *maxBufferedRecords, *useTransactions, *compressionType, *compressiblePayload, *username, *password, *enableTls)
+			name, *brokers, *trace, topicsList[0], *linger, *maxBufferedRecords, *useTransactions, *compressionType, *compressiblePayload, *username, *password, *enableTls, kgoAcks)
 		config := repeater.NewRepeaterConfig(wConfig, topicsList, *group, *keys, *payloadSize, dataInFlightPerWorker, rateLimitPerWorker)
 		lv := repeater.NewWorker(config)
 		if *useTransactions {
@@ -215,9 +221,9 @@ func main() {
 	go func() {
 		listenAddr := fmt.Sprintf("0.0.0.0:%d", *remotePort)
 		if err := http.ListenAndServe(listenAddr, mux); err != nil {
-			panic(fmt.Sprintf("failed to listen on %s: %v", listenAddr, err));
+			panic(fmt.Sprintf("failed to listen on %s: %v", listenAddr, err))
 		}
-	}();
+	}()
 
 	if !*remote {
 		admin, err := NewAdmin()
