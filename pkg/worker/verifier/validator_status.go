@@ -37,6 +37,8 @@ type ValidatorStatus struct {
 	// The highest valid offset consumed throughout the consumer's lifetime
 	MaxOffsetsConsumed map[int32]int64 `json:"max_offsets_consumed"`
 
+	LostOffsets map[int32]int64 `json:"lost_offsets"`
+
 	// Concurrent access happens when doing random reads
 	// with multiple reader fibers
 	lock sync.Mutex
@@ -103,11 +105,33 @@ func (cs *ValidatorStatus) recordOffset(r *kgo.Record) {
 	cs.lastOffsetConsumed[r.Partition] = r.Offset
 }
 
+func (cs *ValidatorStatus) RecordLostOffsets(p int32, count int64) {
+	cs.lock.Lock()
+	defer cs.lock.Unlock()
+
+	if cs.LostOffsets == nil {
+		cs.LostOffsets = make(map[int32]int64)
+	}
+
+	cs.LostOffsets[p] += count
+}
+
 func (cs *ValidatorStatus) ResetMonotonicityTestState() {
 	cs.lock.Lock()
 	defer cs.lock.Unlock()
 
 	cs.lastOffsetConsumed = make(map[int32]int64)
+}
+
+func (cs *ValidatorStatus) SetMonotonicityTestStateForPartition(partition int32, offset int64) {
+	cs.lock.Lock()
+	defer cs.lock.Unlock()
+
+	if cs.lastOffsetConsumed == nil {
+		cs.lastOffsetConsumed = make(map[int32]int64)
+	}
+
+	cs.lastOffsetConsumed[partition] = offset
 }
 
 func (cs *ValidatorStatus) Checkpoint() {

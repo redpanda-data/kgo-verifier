@@ -157,6 +157,7 @@ type WorkerConfig struct {
 	// incompressible payload.
 	CompressiblePayload bool
 
+	TolerateDataLoss bool
 	Continuous bool
 }
 

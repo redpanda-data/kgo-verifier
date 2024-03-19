@@ -65,15 +65,25 @@ type ProducerWorker struct {
 	transactionSTMConfig worker.TransactionSTMConfig
 	transactionSTM       *worker.TransactionSTM
 	churnProducers       bool
+
+	tolerateDataLoss bool
 }
 
 func NewProducerWorker(cfg ProducerConfig) ProducerWorker {
+	validOffsets := LoadTopicOffsetRanges(cfg.workerCfg.Topic, cfg.nPartitions)
+	if cfg.workerCfg.TolerateDataLoss {
+		for ix := range validOffsets.PartitionRanges {
+			validOffsets.PartitionRanges[ix].TolerateDataLoss = true
+		}
+	}
+
 	return ProducerWorker{
-		config:         cfg,
-		Status:         NewProducerWorkerStatus(cfg.workerCfg.Topic),
-		validOffsets:   LoadTopicOffsetRanges(cfg.workerCfg.Topic, cfg.nPartitions),
-		payload:        cfg.valueGenerator.Generate(),
-		churnProducers: cfg.messagesPerProducerId > 0,
+		config:           cfg,
+		Status:           NewProducerWorkerStatus(cfg.workerCfg.Topic),
+		validOffsets:     validOffsets,
+		payload:          cfg.valueGenerator.Generate(),
+		churnProducers:   cfg.messagesPerProducerId > 0,
+		tolerateDataLoss: cfg.workerCfg.TolerateDataLoss,
 	}
 }
 

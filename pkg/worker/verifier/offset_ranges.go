@@ -42,6 +42,8 @@ type OffsetRange struct {
 
 type OffsetRanges struct {
 	Ranges []OffsetRange
+
+	TolerateDataLoss bool
 }
 
 func (ors *OffsetRanges) Insert(o int64) {
@@ -52,18 +54,41 @@ func (ors *OffsetRanges) Insert(o int64) {
 		return
 	}
 
+	{
+		last := ors.Ranges[len(ors.Ranges)-1]
+
+		// Handle out of order inserts.
+		if o < last.Upper {
+			if ors.TolerateDataLoss {
+				// Truncate the ranges to the last offset.
+				for i, r := range ors.Ranges {
+					if o >= r.Lower && o < r.Upper {
+						// If the offset is within the range, truncate the range
+						// and remove all subsequent ranges.
+						ors.Ranges = ors.Ranges[:i+1]
+						ors.Ranges[i].Upper = o
+						break
+					} else if o < r.Lower {
+						// If the offset is before the range, truncate the range and all subsequent ranges.
+						ors.Ranges = ors.Ranges[:i]
+						break
+					}
+				}
+			} else {
+				// TODO: more flexible structure for out of order inserts, at the moment
+				// we rely on franz-go callbacks being invoked in order.
+				panic(fmt.Sprintf("Out of order offset %d (vs %d %d)", o, last.Lower, last.Upper))
+			}
+		}
+	}
+
 	last := &ors.Ranges[len(ors.Ranges)-1]
 	if o >= last.Lower && o == last.Upper {
+		// Extend the last range if the offset is the next one.
 		last.Upper += 1
-		return
 	} else {
-		if o < last.Upper {
-			// TODO: more flexible structure for out of order inserts, at the moment
-			// we rely on franz-go callbacks being invoked in order.
-			util.Die("Out of order offset %d (vs %d %d)", o, last.Lower, last.Upper)
-		} else {
-			ors.Ranges = append(ors.Ranges, OffsetRange{Lower: o, Upper: o + 1})
-		}
+		// Otherwise, create a new range.
+		ors.Ranges = append(ors.Ranges, OffsetRange{Lower: o, Upper: o + 1})
 	}
 }
 
