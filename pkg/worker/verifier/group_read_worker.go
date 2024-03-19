@@ -2,6 +2,7 @@ package verifier
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -252,7 +253,13 @@ func (grw *GroupReadWorker) consumerGroupReadInner(
 			log.Warnf(
 				"fiber %v: Consumer group fetch %s/%d e=%v...",
 				fiberId, t, p, err)
-			r_err = err
+			var lossErr *kgo.ErrDataLoss
+			if grw.config.workerCfg.TolerateDataLoss && errors.As(err, &lossErr) {
+				grw.Status.Validator.RecordLostOffsets(lossErr.Partition, lossErr.ConsumedTo-lossErr.ResetTo)
+				grw.Status.Validator.SetMonotonicityTestStateForPartition(p, lossErr.ResetTo-1)
+			} else {
+				r_err = err
+			}
 		})
 
 		if r_err != nil {

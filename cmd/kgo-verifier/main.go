@@ -69,6 +69,8 @@ var (
 
 	compressionType     = flag.String("compression-type", "", "One of none, gzip, snappy, lz4, zstd, or 'mixed' to pick a random codec for each producer")
 	compressiblePayload = flag.Bool("compressible-payload", false, "If true, use a highly compressible payload instead of the default random payload")
+
+	tolerateDataLoss = flag.Bool("tolerate-data-loss", false, "If true, tolerate data-loss events")
 )
 
 func makeWorkerConfig() worker.WorkerConfig {
@@ -86,6 +88,7 @@ func makeWorkerConfig() worker.WorkerConfig {
 		Transactions:        *useTransactions,
 		CompressionType:     *compressionType,
 		CompressiblePayload: *compressiblePayload,
+		TolerateDataLoss:    *tolerateDataLoss,
 		Continuous:          *continuous,
 	}
 

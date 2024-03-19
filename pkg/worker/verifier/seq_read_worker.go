@@ -2,6 +2,7 @@ package verifier
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	worker "github.com/redpanda-data/kgo-verifier/pkg/worker"
@@ -139,7 +140,13 @@ func (srw *SeqReadWorker) sequentialReadInner(ctx context.Context, startAt []int
 		var r_err error
 		fetches.EachError(func(t string, p int32, err error) {
 			log.Warnf("Sequential fetch %s/%d e=%v...", t, p, err)
-			r_err = err
+			var lossErr *kgo.ErrDataLoss
+			if srw.config.workerCfg.TolerateDataLoss && errors.As(err, &lossErr) {
+				srw.Status.Validator.RecordLostOffsets(lossErr.Partition, lossErr.ConsumedTo-lossErr.ResetTo)
+				srw.Status.Validator.SetMonotonicityTestStateForPartition(p, lossErr.ResetTo-1)
+			} else {
+				r_err = err
+			}
 		})
 
 		if r_err != nil {
