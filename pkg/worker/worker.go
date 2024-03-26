@@ -156,6 +156,8 @@ type WorkerConfig struct {
 	// If true, use a payload that compresses easily.  If false, use an
 	// incompressible payload.
 	CompressiblePayload bool
+
+	Continuous bool
 }
 
 func CompressionCodecFromString(s string) (kgo.CompressionCodec, error) {

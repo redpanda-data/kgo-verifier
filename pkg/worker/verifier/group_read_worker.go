@@ -78,9 +78,14 @@ func NewConsumerGroupOffsets(
 	maxReadCount int,
 	rateLimitBytes int,
 	cancelFunc context.CancelFunc) ConsumerGroupOffsets {
-	lastSeen := make([]int64, len(hwms))
-	upTo := make([]int64, len(hwms))
-	copy(upTo, hwms)
+
+	var lastSeen, upTo []int64
+	if len(hwms) > 0 {
+		lastSeen = make([]int64, len(hwms))
+		upTo = make([]int64, len(hwms))
+		copy(upTo, hwms)
+	}
+
 	var rlimiter *rate.Limiter
 	if rateLimitBytes > 0 {
 		rlimiter = rate.NewLimiter(rate.Limit(rateLimitBytes), rateLimitBytes)
@@ -104,54 +109,59 @@ func (cgs *ConsumerGroupOffsets) AddRecord(ctx context.Context, r *kgo.Record) {
 
 	cgs.curReadCount += 1
 
-	if r.Offset > cgs.lastSeen[r.Partition] {
-		cgs.lastSeen[r.Partition] = r.Offset
-	}
-
 	if cgs.maxReadCount >= 0 && cgs.curReadCount >= cgs.maxReadCount {
 		cgs.cancelFunc()
 		return
 	}
 
-	if cgs.lastSeen[r.Partition] >= cgs.upTo[r.Partition]-1 {
-		allComplete := true
-		for p, hwm := range cgs.upTo {
-			if cgs.lastSeen[p] < hwm-1 {
-				allComplete = false
-				break
-			}
+	if len(cgs.upTo) > 0 {
+		if r.Offset > cgs.lastSeen[r.Partition] {
+			cgs.lastSeen[r.Partition] = r.Offset
 		}
-		if allComplete {
-			cgs.cancelFunc()
+
+		if cgs.lastSeen[r.Partition] >= cgs.upTo[r.Partition]-1 {
+			allComplete := true
+			for p, hwm := range cgs.upTo {
+				if cgs.lastSeen[p] < hwm-1 {
+					allComplete = false
+					break
+				}
+			}
+			if allComplete {
+				cgs.cancelFunc()
+			}
 		}
 	}
 }
 
-func (grw *GroupReadWorker) Wait() error {
+func (grw *GroupReadWorker) Wait(ctx context.Context) error {
 	grw.Status.Active = true
 	defer func() { grw.Status.Active = false }()
 
-	client, err := kgo.NewClient(grw.config.workerCfg.MakeKgoOpts()...)
-	if err != nil {
-		log.Errorf("Error constructing client: %v", err)
-		return err
-	}
-
-	startOffsets := GetOffsets(client, grw.config.workerCfg.Topic, grw.config.nPartitions, -2)
-	hwms := GetOffsets(client, grw.config.workerCfg.Topic, grw.config.nPartitions, -1)
-	client.Close()
-
-	hasMessages := false
-	for p := 0; p < int(grw.config.nPartitions); p++ {
-		if startOffsets[p] < hwms[p] {
-			hasMessages = true
-			break
+	var hwms []int64
+	if !grw.config.workerCfg.Continuous {
+		client, err := kgo.NewClient(grw.config.workerCfg.MakeKgoOpts()...)
+		if err != nil {
+			log.Errorf("Error constructing client: %v", err)
+			return err
 		}
-	}
 
-	if !hasMessages {
-		log.Infof("Topic is empty, exiting...")
-		return nil
+		startOffsets := GetOffsets(client, grw.config.workerCfg.Topic, grw.config.nPartitions, -2)
+		hwms = GetOffsets(client, grw.config.workerCfg.Topic, grw.config.nPartitions, -1)
+		client.Close()
+
+		hasMessages := false
+		for p := 0; p < int(grw.config.nPartitions); p++ {
+			if startOffsets[p] < hwms[p] {
+				hasMessages = true
+				break
+			}
+		}
+
+		if !hasMessages {
+			log.Infof("Topic is empty, exiting...")
+			return nil
+		}
 	}
 
 	groupName := grw.config.groupName
@@ -164,7 +174,7 @@ func (grw *GroupReadWorker) Wait() error {
 
 	log.Infof("Reading with consumer group %s", groupName)
 
-	ctx, cancelFunc := context.WithCancel(context.Background())
+	ctx, cancelFunc := context.WithCancel(ctx)
 	cgOffsets := NewConsumerGroupOffsets(
 		hwms, grw.config.maxReadCount, grw.config.rateLimitBytes, cancelFunc)
 

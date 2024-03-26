@@ -53,7 +53,8 @@ var (
 	maxBufferedRecords  = flag.Uint("max-buffered-records", 1024, "Producer buffer size: the default of 1 is makes roughly one event per batch, useful for measurement.  Set to something higher to make it easier to max out bandwidth.")
 	remote              = flag.Bool("remote", false, "Remote control mode, driven by HTTP calls, for use in automated tests")
 	remotePort          = flag.Uint("remote-port", 7884, "HTTP listen port for remote control/query")
-	loop                = flag.Bool("loop", false, "For readers, run indefinitely until stopped via signal or HTTP call")
+	loop                = flag.Bool("loop", false, "For readers, repeatedly consume from the beginning, looping to the beginning after hitting the end of the topic until stopped via signal")
+	continuous          = flag.Bool("continuous", false, "For readers, wait for new messages to arrive after hitting the end of the topic until stopped via signal or HTTP call")
 	name                = flag.String("client-name", "kgo", "Name of kafka client")
 	fakeTimestampMs     = flag.Int64("fake-timestamp-ms", -1, "Producer: set artificial batch timestamps on an incrementing basis, starting from this number")
 	fakeTimestampStepMs = flag.Int64("fake-timestamp-step-ms", 1, "Producer: step size used to increment fake timestamp")
@@ -85,6 +86,7 @@ func makeWorkerConfig() worker.WorkerConfig {
 		Transactions:        *useTransactions,
 		CompressionType:     *compressionType,
 		CompressiblePayload: *compressiblePayload,
+		Continuous:          *continuous,
 	}
 
 	return c
@@ -221,10 +223,19 @@ func main() {
 		}
 	}()
 
+	if *loop && *continuous {
+		util.Die("Cannot use -loop and -continuous together")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
 	loopState := util.NewLoopState(*loop)
 	go func() {
 		<-lastPassChan
-		loopState.RequestLastPass()
+		if *continuous {
+			cancel()
+		} else {
+			loopState.RequestLastPass()
+		}
 	}()
 
 	if *pCount > 0 {
@@ -250,7 +261,7 @@ func main() {
 
 		for loopState.Next() {
 			log.Info("Starting sequential read pass")
-			waitErr := srw.Wait()
+			waitErr := srw.Wait(ctx)
 			if waitErr != nil {
 				// Proceed around the loop, to be tolerant of e.g. kafka client
 				// construct failures on unavailable cluster
@@ -298,7 +309,7 @@ func main() {
 
 		for loopState.Next() {
 			log.Info("Starting group read pass")
-			waitErr := grw.Wait()
+			waitErr := grw.Wait(ctx)
 			util.Chk(waitErr, "Consumer error: %v", err)
 		}
 	}
