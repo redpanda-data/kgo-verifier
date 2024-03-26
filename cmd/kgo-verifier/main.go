@@ -198,7 +198,11 @@ func main() {
 				log.Warn("unable to parse timeout query param, skipping printing stack trace logs")
 			}
 		}
-		lastPassChan <- 1
+		select {
+		case lastPassChan <- 1:
+		default:
+			log.Warn("last_pass channel is full, skipping")
+		}
 	})
 
 	mux.HandleFunc("/print_stack", func(w http.ResponseWriter, r *http.Request) {
