@@ -15,7 +15,7 @@ import (
 
 type GroupReadConfig struct {
 	workerCfg      worker.WorkerConfig
-	name           string
+	groupName      string
 	nPartitions    int32
 	nReaders       int
 	maxReadCount   int
@@ -27,7 +27,7 @@ func NewGroupReadConfig(
 	maxReadCount int, rateLimitBytes int) GroupReadConfig {
 	return GroupReadConfig{
 		workerCfg:      wc,
-		name:           name,
+		groupName:      name,
 		nPartitions:    nPartitions,
 		nReaders:       nReaders,
 		maxReadCount:   maxReadCount,
@@ -154,9 +154,12 @@ func (grw *GroupReadWorker) Wait() error {
 		return nil
 	}
 
-	groupName := fmt.Sprintf(
-		"kgo-verifier-%d-%d-%d", time.Now().Unix(), os.Getpid(), grw.Status.runCount)
-	grw.Status.runCount += 1
+	groupName := grw.config.groupName
+	if grw.config.groupName == "" {
+		groupName = fmt.Sprintf(
+			"kgo-verifier-%d-%d-%d", time.Now().Unix(), os.Getpid(), grw.Status.runCount)
+		grw.Status.runCount += 1
+	}
 
 	log.Infof("Reading with consumer group %s", groupName)
 
