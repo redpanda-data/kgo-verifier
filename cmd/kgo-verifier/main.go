@@ -180,7 +180,11 @@ func main() {
 
 	mux.HandleFunc("/shutdown", func(w http.ResponseWriter, r *http.Request) {
 		log.Info("Remote request /shutdown")
-		shutdownChan <- 1
+		select {
+		case shutdownChan <- 1:
+		default:
+			log.Warn("shutdown channel is full, skipping")
+		}
 	})
 
 	mux.HandleFunc("/last_pass", func(w http.ResponseWriter, r *http.Request) {
@@ -198,7 +202,11 @@ func main() {
 				log.Warn("unable to parse timeout query param, skipping printing stack trace logs")
 			}
 		}
-		lastPassChan <- 1
+		select {
+		case lastPassChan <- 1:
+		default:
+			log.Warn("last_pass channel is full, skipping")
+		}
 	})
 
 	mux.HandleFunc("/print_stack", func(w http.ResponseWriter, r *http.Request) {
