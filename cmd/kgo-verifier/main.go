@@ -48,6 +48,7 @@ var (
 	seqConsumeCount     = flag.Int("seq_read_msgs", -1, "Seq/group consumer: set max number of records to consume")
 	batchMaxBytes       = flag.Int("batch_max_bytes", 1048576, "the maximum batch size to allow per-partition (must be less than Kafka's max.message.bytes, producing)")
 	cgReaders           = flag.Int("consumer_group_readers", 0, "Number of parallel readers in the consumer group")
+	cgName              = flag.String("consumer_group_name", "", "The name of the consumer group. Generated randomly if not set.")
 	linger              = flag.Duration("linger", 0, "if non-zero, linger to use when producing")
 	maxBufferedRecords  = flag.Uint("max-buffered-records", 1024, "Producer buffer size: the default of 1 is makes roughly one event per batch, useful for measurement.  Set to something higher to make it easier to max out bandwidth.")
 	remote              = flag.Bool("remote", false, "Remote control mode, driven by HTTP calls, for use in automated tests")
@@ -291,9 +292,13 @@ func main() {
 	}
 
 	if *cgReaders > 0 {
+		if *loop && *cgName != "" {
+			util.Die("Cannot use -loop and -consumer_group_name together")
+		}
+
 		grw := verifier.NewGroupReadWorker(
 			verifier.NewGroupReadConfig(
-				makeWorkerConfig(), "groupReader", nPartitions, *cgReaders,
+				makeWorkerConfig(), *cgName, nPartitions, *cgReaders,
 				*seqConsumeCount, (*consumeTputMb)*1024*1024))
 		workers = append(workers, &grw)
 
