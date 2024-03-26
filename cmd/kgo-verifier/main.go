@@ -227,9 +227,7 @@ func main() {
 		waitErr := pw.Wait()
 		util.Chk(err, "Producer error: %v", waitErr)
 		log.Info("Finished producer.")
-	}
-
-	if *seqRead {
+	} else if *seqRead {
 		srw := verifier.NewSeqReadWorker(verifier.NewSeqReadConfig(
 			makeWorkerConfig(), "sequential", nPartitions, *seqConsumeCount,
 			(*consumeTputMb)*1024*1024,
@@ -252,9 +250,7 @@ func main() {
 				log.Warnf("Error from sequeqntial read worker: %v", err)
 			}
 		}
-	}
-
-	if *cCount > 0 {
+	} else if *cCount > 0 {
 		var wg sync.WaitGroup
 		var randomWorkers []*verifier.RandomReadWorker
 		for i := 0; i < *parallelRead; i++ {
@@ -289,9 +285,7 @@ func main() {
 			}
 			wg.Wait()
 		}
-	}
-
-	if *cgReaders > 0 {
+	} else if *cgReaders > 0 {
 		if *loop && *cgName != "" {
 			util.Die("Cannot use -loop and -consumer_group_name together")
 		}
