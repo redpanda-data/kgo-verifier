@@ -260,7 +260,7 @@ func (v *Worker) ConsumeRecord(r *kgo.Record) {
 
 	v.globalStats.E2e_latency.Update(e2e_latency)
 
-	log.Debugf("Consume %s token %06d, total latency %s", v.config.workerCfg.Name, token, e2e_latency)
+	log.Debugf("Consume %s token %06d, total latency %v", v.config.workerCfg.Name, token, e2e_latency)
 	v.pending <- int64(token)
 }
 
@@ -495,7 +495,7 @@ loop:
 		})
 
 	}
-	log.Debug("Consume %s dropping out", v.config.workerCfg.Name)
+	log.Debugf("Consume %s dropping out", v.config.workerCfg.Name)
 
 	sync_ctx, _ := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	v.client.CommitUncommittedOffsets(sync_ctx)
