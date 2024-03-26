@@ -213,6 +213,12 @@ func main() {
 		}
 	}()
 
+	loopState := util.NewLoopState(*loop)
+	go func() {
+		<-lastPassChan
+		loopState.RequestLastPass()
+	}()
+
 	if *pCount > 0 {
 		log.Info("Starting producer...")
 		pwc := verifier.NewProducerConfig(makeWorkerConfig(), "producer", nPartitions, *mSize, *pCount, *fakeTimestampMs, *fakeTimestampStepMs, (*produceRateLimitBps), *keySetCardinality, *msgsPerProducerId)
@@ -234,15 +240,8 @@ func main() {
 		))
 		workers = append(workers, &srw)
 
-		firstPass := true
-		lastPass := false
-		for firstPass || (!lastPass && *loop) {
+		for loopState.Next() {
 			log.Info("Starting sequential read pass")
-			firstPass = false
-			lastPass = len(lastPassChan) != 0
-			if lastPass {
-				log.Info("This will be the last pass")
-			}
 			waitErr := srw.Wait()
 			if waitErr != nil {
 				// Proceed around the loop, to be tolerant of e.g. kafka client
@@ -262,14 +261,7 @@ func main() {
 			workers = append(workers, &worker)
 		}
 
-		firstPass := true
-		lastPass := false
-		for firstPass || (!lastPass && *loop) {
-			lastPass = len(lastPassChan) != 0
-			if lastPass {
-				log.Info("This will be the last pass")
-			}
-			firstPass = false
+		for loopState.Next() {
 			for _, w := range randomWorkers {
 				wg.Add(1)
 				go func(worker *verifier.RandomReadWorker) {
@@ -296,15 +288,8 @@ func main() {
 				*seqConsumeCount, (*consumeTputMb)*1024*1024))
 		workers = append(workers, &grw)
 
-		firstPass := true
-		lastPass := false
-		for firstPass || (!lastPass && *loop) {
+		for loopState.Next() {
 			log.Info("Starting group read pass")
-			lastPass = len(lastPassChan) != 0
-			if lastPass {
-				log.Info("This will be the last pass")
-			}
-			firstPass = false
 			waitErr := grw.Wait()
 			util.Chk(waitErr, "Consumer error: %v", err)
 		}
