@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	"github.com/redpanda-data/kgo-verifier/pkg/util"
 	worker "github.com/redpanda-data/kgo-verifier/pkg/worker"
 	log "github.com/sirupsen/logrus"
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"golang.org/x/sync/semaphore"
 	"golang.org/x/time/rate"
@@ -67,6 +69,8 @@ type ProducerWorker struct {
 	churnProducers       bool
 
 	tolerateDataLoss bool
+
+	mu sync.Mutex
 }
 
 func NewProducerWorker(cfg ProducerConfig) ProducerWorker {
@@ -139,6 +143,9 @@ type ProducerWorkerStatus struct {
 	// by the server at the offset we expected)?
 	Acked int64 `json:"acked"`
 
+	// How many messages were committed as part of a transaction?
+	Committed int64 `json:"committed"`
+
 	// How many messages landed at an unexpected offset?
 	// (indicates retries/resends)
 	BadOffsets int64 `json:"bad_offsets"`
@@ -197,6 +204,12 @@ func (self *ProducerWorkerStatus) OnAcked(Partition int32, Offset int64) {
 	} else {
 		self.MaxOffsetsProduced[Partition] = Offset
 	}
+}
+
+func (self *ProducerWorkerStatus) OnCommitted(n int64) {
+	self.lock.Lock()
+	defer self.lock.Unlock()
+	self.Committed += n
 }
 
 func (self *ProducerWorkerStatus) OnBadOffset() {
@@ -301,6 +314,11 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 		rlimiter = rate.NewLimiter(rate.Limit(pw.config.rateLimitBytes), pw.config.rateLimitBytes)
 	}
 
+	// Track the number of messages acknowledged within the current transaction.
+	// We use this to predict when control markers are added to the log.
+	thisTxSent := make([]int64, pw.config.nPartitions)
+	thisTxAcked := make([]int64, pw.config.nPartitions)
+
 	for i := int64(0); i < n && len(bad_offsets) == 0; i = i + 1 {
 		concurrent.Acquire(context.Background(), 1)
 		produced += 1
@@ -308,7 +326,7 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 		var p = rand.Int31n(pw.config.nPartitions)
 
 		if pw.transactionsEnabled {
-			addedControlMarkers, err := pw.transactionSTM.BeforeMessageSent()
+			didCommitTx, didEndTx, err := pw.transactionSTM.BeforeMessageSent()
 			if err != nil {
 				log.Errorf("Transaction error %v", err)
 				errored = true
@@ -316,20 +334,44 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 				break
 			}
 
-			if addedControlMarkers > 0 {
-				for i, _ := range nextOffset {
-					for j := int64(0); j < int64(addedControlMarkers); j = j + 1 {
-						pw.validOffsets.Insert(p, nextOffset[i]+j)
+			// BeforeMessageSent will block if it will need to end a transaction. If it does, we need to
+			// update the offsets to account for the control markers that will be added to the log.
+			if didEndTx {
+				for p, acked := range thisTxAcked {
+					if acked > 0 {
+						// If at least one message was acked in the transaction, we will also write a control marker
+						// for the end of the transaction.
+						pw.validOffsets.Insert(int32(p), nextOffset[p])
+						nextOffset[p] += 1
+
+						if didCommitTx {
+							pw.Status.OnCommitted(acked)
+						}
 					}
-					nextOffset[i] += addedControlMarkers
 				}
+
+				// Reset the counts for each partition.
+				thisTxAcked = make([]int64, pw.config.nPartitions)
+				thisTxSent = make([]int64, pw.config.nPartitions)
 			}
+
+			if thisTxSent[p] == 0 {
+				// First message for this partition will also produce the start of tx control marker.
+				// So the expected offset of the message is +1 of what we currently track.
+				//
+				// We don't know yet if it will be actually produced or errored so we don't insert it yet into the validOffsets.
+				// We'll do that when we get the first ack back.
+				nextOffset[p] += 1
+			}
+
+			thisTxSent[p] += 1
 		}
 
 		if pw.churnProducers && pw.Status.Sent > 0 && pw.Status.Sent%int64(pw.config.messagesPerProducerId) == 0 {
 			break
 		}
 
+		// We expect the next offset to be the current offset + 1
 		expectOffset := nextOffset[p]
 		nextOffset[p] += 1
 
@@ -346,19 +388,40 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 		sentAt := time.Now()
 		handler := func(r *kgo.Record, err error) {
 			concurrent.Release(1)
-			util.Chk(err, "Produce failed: %v", err)
-			if expectOffset != r.Offset {
-				log.Warnf("Produced at unexpected offset %d (expected %d) on partition %d", r.Offset, expectOffset, r.Partition)
-				pw.Status.OnBadOffset()
-				bad_offsets <- BadOffset{r.Partition, r.Offset}
-				errored = true
-				log.Debugf("errored = %t", errored)
+			if err != nil {
+				if pw.transactionsEnabled && errors.Is(err, kerr.InvalidProducerIDMapping) {
+					// Redpanda: implementation, at least up to v24.1, stores some metadata in memory only. If the coordinator
+					// crashes, it loses this metadata. This is a known limitation of the current implementation. We can retry
+					// the transaction.
+					//
+					// This, and all subsequent messages in the transaction, will get the same error.
+					log.Warnf("Produce failed: %v", err)
+				} else {
+					util.Chk(err, "Produce failed: %v", err)
+				}
 			} else {
-				ackLatency := time.Since(sentAt)
-				pw.Status.OnAcked(r.Partition, r.Offset)
-				pw.Status.latency.Update(ackLatency.Microseconds())
-				log.Debugf("Wrote partition %d at %d", r.Partition, r.Offset)
-				pw.validOffsets.Insert(r.Partition, r.Offset)
+				if expectOffset != r.Offset {
+					log.Warnf("Produced at unexpected offset %d (expected %d) on partition %d", r.Offset, expectOffset, r.Partition)
+					pw.Status.OnBadOffset()
+					bad_offsets <- BadOffset{r.Partition, r.Offset}
+					errored = true
+					log.Debugf("errored = %t", errored)
+				} else {
+					ackLatency := time.Since(sentAt)
+					pw.Status.latency.Update(ackLatency.Microseconds())
+					log.Debugf("Wrote partition %d at %d", r.Partition, r.Offset)
+
+					pw.mu.Lock()
+					if thisTxSent[r.Partition] > 0 && thisTxAcked[r.Partition] == 0 {
+						// First ack for this partition is also a signal that the control marker for start of the transaction was written.
+						pw.validOffsets.Insert(r.Partition, r.Offset-1)
+					}
+					thisTxAcked[r.Partition] += 1
+					pw.validOffsets.Insert(r.Partition, r.Offset)
+					pw.Status.OnAcked(r.Partition, r.Offset)
+					pw.mu.Unlock()
+
+				}
 			}
 			wg.Done()
 		}
@@ -384,7 +447,6 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 	log.Info("Waiting...")
 	wg.Wait()
 	log.Info("Waited.")
-	wg.Wait()
 	close(bad_offsets)
 
 	log.Info("Closing client...")

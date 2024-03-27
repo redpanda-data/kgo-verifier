@@ -79,7 +79,7 @@ func (ors *OffsetRanges) Insert(o int64) {
 			} else {
 				// TODO: more flexible structure for out of order inserts, at the moment
 				// we rely on franz-go callbacks being invoked in order.
-				panic(fmt.Sprintf("Out of order offset %d (vs %d %d)", o, last.Lower, last.Upper))
+				panic(fmt.Sprintf("Out of order offset %d (last range: %d-%d)", o, last.Lower, last.Upper))
 			}
 		}
 	}

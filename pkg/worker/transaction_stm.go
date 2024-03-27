@@ -4,6 +4,7 @@ import (
 	"context"
 	"math/rand"
 	_ "net/http/pprof"
+	"sync"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -29,6 +30,9 @@ type TransactionSTM struct {
 	activeTransaction  bool
 	abortedTransaction bool
 	currentMgsProduced uint
+
+	mu       sync.RWMutex
+	anyAcked bool
 }
 
 func NewTransactionSTM(ctx context.Context, client *kgo.Client, config TransactionSTMConfig) *TransactionSTM {
@@ -67,27 +71,27 @@ func (t *TransactionSTM) TryEndTransaction() error {
 // Returns true iff a new transaction was started and/or a current
 // transaction ended. This is to notify any producers that control
 // markers will be added to a partition's log.
-func (t *TransactionSTM) BeforeMessageSent() (int64, error) {
-	// EndTransaction/abort and BeginTransaction will each leave
-	// one control record in each partition's log.
-	var addedControlMarkers int64 = 0
+func (t *TransactionSTM) BeforeMessageSent() (bool, bool, error) {
+	didCommitTx := false
+	didEndTx := false
 
 	if t.currentMgsProduced == t.config.msgsPerTransaction {
 		if err := t.client.Flush(t.ctx); err != nil {
 			log.Errorf("Unable to flush: %v", err)
-			return addedControlMarkers, err
+			return didCommitTx, didEndTx, err
 		}
 		if err := t.client.EndTransaction(t.ctx, kgo.TransactionEndTry(!t.abortedTransaction)); err != nil {
 			log.Errorf("Unable to end transaction: %v", err)
-			return addedControlMarkers, err
+			return didCommitTx, didEndTx, err
 		}
+
+		didEndTx = true
+		didCommitTx = !t.abortedTransaction
 
 		log.Debugf("Ended transaction; aborted = %t", t.abortedTransaction)
 
 		t.currentMgsProduced = 0
 		t.activeTransaction = false
-
-		addedControlMarkers += 1
 	}
 
 	// Begin new transaction if one doesn't exist
@@ -97,16 +101,22 @@ func (t *TransactionSTM) BeforeMessageSent() (int64, error) {
 
 		if err := t.client.BeginTransaction(); err != nil {
 			log.Errorf("Couldn't start a transaction: %v", err)
-			return 0, err
+			return didCommitTx, didEndTx, err
 		}
 
 		log.Debugf("Started transaction; will abort = %t", t.abortedTransaction)
-
-		addedControlMarkers += 1
 	}
 
 	t.currentMgsProduced += 1
-	return addedControlMarkers, nil
+	return didCommitTx, didEndTx, nil
+}
+
+func (t *TransactionSTM) OnMessageAck(err error) {
+	if err != nil {
+		t.mu.Lock()
+		t.anyAcked = true
+		t.mu.Unlock()
+	}
 }
 
 func (t *TransactionSTM) InAbortedTransaction() bool {
