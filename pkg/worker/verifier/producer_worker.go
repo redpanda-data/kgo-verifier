@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	"github.com/redpanda-data/kgo-verifier/pkg/util"
 	worker "github.com/redpanda-data/kgo-verifier/pkg/worker"
 	log "github.com/sirupsen/logrus"
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"golang.org/x/sync/semaphore"
 	"golang.org/x/time/rate"
@@ -350,8 +352,18 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 		sentAt := time.Now()
 		handler := func(r *kgo.Record, err error) {
 			concurrent.Release(1)
-			util.Chk(err, "Produce failed: %v", err)
-			if expectOffset != r.Offset {
+			if err != nil {
+				if pw.transactionsEnabled && errors.Is(err, kerr.InvalidProducerIDMapping) {
+					// Redpanda: implementation, at least up to v24.1, stores some metadata in memory only. If the coordinator
+					// crashes, it loses this metadata. This is a known limitation of the current implementation. We can retry
+					// the transaction.
+					//
+					// This, and all subsequent messages in the transaction, will get the same error.
+					log.Warnf("Produce failed: %v", err)
+				} else {
+					util.Chk(err, "Produce failed: %v", err)
+				}
+			} else if expectOffset != r.Offset {
 				log.Warnf("Produced at unexpected offset %d (expected %d) on partition %d", r.Offset, expectOffset, r.Partition)
 				pw.Status.OnBadOffset()
 				bad_offsets <- BadOffset{r.Partition, r.Offset}
