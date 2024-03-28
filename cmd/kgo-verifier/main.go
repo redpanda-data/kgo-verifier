@@ -48,11 +48,13 @@ var (
 	seqConsumeCount     = flag.Int("seq_read_msgs", -1, "Seq/group consumer: set max number of records to consume")
 	batchMaxBytes       = flag.Int("batch_max_bytes", 1048576, "the maximum batch size to allow per-partition (must be less than Kafka's max.message.bytes, producing)")
 	cgReaders           = flag.Int("consumer_group_readers", 0, "Number of parallel readers in the consumer group")
+	cgName              = flag.String("consumer_group_name", "", "The name of the consumer group. Generated randomly if not set.")
 	linger              = flag.Duration("linger", 0, "if non-zero, linger to use when producing")
 	maxBufferedRecords  = flag.Uint("max-buffered-records", 1024, "Producer buffer size: the default of 1 is makes roughly one event per batch, useful for measurement.  Set to something higher to make it easier to max out bandwidth.")
 	remote              = flag.Bool("remote", false, "Remote control mode, driven by HTTP calls, for use in automated tests")
 	remotePort          = flag.Uint("remote-port", 7884, "HTTP listen port for remote control/query")
-	loop                = flag.Bool("loop", false, "For readers, run indefinitely until stopped via signal or HTTP call")
+	loop                = flag.Bool("loop", false, "For readers, repeatedly consume from the beginning, looping to the beginning after hitting the end of the topic until stopped via signal")
+	continuous          = flag.Bool("continuous", false, "For readers, wait for new messages to arrive after hitting the end of the topic until stopped via signal or HTTP call")
 	name                = flag.String("client-name", "kgo", "Name of kafka client")
 	fakeTimestampMs     = flag.Int64("fake-timestamp-ms", -1, "Producer: set artificial batch timestamps on an incrementing basis, starting from this number")
 	fakeTimestampStepMs = flag.Int64("fake-timestamp-step-ms", 1, "Producer: step size used to increment fake timestamp")
@@ -67,6 +69,8 @@ var (
 
 	compressionType     = flag.String("compression-type", "", "One of none, gzip, snappy, lz4, zstd, or 'mixed' to pick a random codec for each producer")
 	compressiblePayload = flag.Bool("compressible-payload", false, "If true, use a highly compressible payload instead of the default random payload")
+
+	tolerateDataLoss = flag.Bool("tolerate-data-loss", false, "If true, tolerate data-loss events")
 )
 
 func makeWorkerConfig() worker.WorkerConfig {
@@ -84,6 +88,8 @@ func makeWorkerConfig() worker.WorkerConfig {
 		Transactions:        *useTransactions,
 		CompressionType:     *compressionType,
 		CompressiblePayload: *compressiblePayload,
+		TolerateDataLoss:    *tolerateDataLoss,
+		Continuous:          *continuous,
 	}
 
 	return c
@@ -179,7 +185,11 @@ func main() {
 
 	mux.HandleFunc("/shutdown", func(w http.ResponseWriter, r *http.Request) {
 		log.Info("Remote request /shutdown")
-		shutdownChan <- 1
+		select {
+		case shutdownChan <- 1:
+		default:
+			log.Warn("shutdown channel is full, skipping")
+		}
 	})
 
 	mux.HandleFunc("/last_pass", func(w http.ResponseWriter, r *http.Request) {
@@ -197,7 +207,11 @@ func main() {
 				log.Warn("unable to parse timeout query param, skipping printing stack trace logs")
 			}
 		}
-		lastPassChan <- 1
+		select {
+		case lastPassChan <- 1:
+		default:
+			log.Warn("last_pass channel is full, skipping")
+		}
 	})
 
 	mux.HandleFunc("/print_stack", func(w http.ResponseWriter, r *http.Request) {
@@ -209,6 +223,21 @@ func main() {
 		listenAddr := fmt.Sprintf("0.0.0.0:%d", *remotePort)
 		if err := http.ListenAndServe(listenAddr, mux); err != nil {
 			panic(fmt.Sprintf("failed to listen on %s: %v", listenAddr, err))
+		}
+	}()
+
+	if *loop && *continuous {
+		util.Die("Cannot use -loop and -continuous together")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	loopState := util.NewLoopState(*loop)
+	go func() {
+		<-lastPassChan
+		if *continuous {
+			cancel()
+		} else {
+			loopState.RequestLastPass()
 		}
 	}()
 
@@ -226,34 +255,23 @@ func main() {
 		waitErr := pw.Wait()
 		util.Chk(err, "Producer error: %v", waitErr)
 		log.Info("Finished producer.")
-	}
-
-	if *seqRead {
+	} else if *seqRead {
 		srw := verifier.NewSeqReadWorker(verifier.NewSeqReadConfig(
 			makeWorkerConfig(), "sequential", nPartitions, *seqConsumeCount,
 			(*consumeTputMb)*1024*1024,
 		))
 		workers = append(workers, &srw)
 
-		firstPass := true
-		lastPass := false
-		for firstPass || (!lastPass && *loop) {
+		for loopState.Next() {
 			log.Info("Starting sequential read pass")
-			firstPass = false
-			lastPass = len(lastPassChan) != 0
-			if lastPass {
-				log.Info("This will be the last pass")
-			}
-			waitErr := srw.Wait()
+			waitErr := srw.Wait(ctx)
 			if waitErr != nil {
 				// Proceed around the loop, to be tolerant of e.g. kafka client
 				// construct failures on unavailable cluster
 				log.Warnf("Error from sequeqntial read worker: %v", err)
 			}
 		}
-	}
-
-	if *cCount > 0 {
+	} else if *cCount > 0 {
 		var wg sync.WaitGroup
 		var randomWorkers []*verifier.RandomReadWorker
 		for i := 0; i < *parallelRead; i++ {
@@ -265,14 +283,7 @@ func main() {
 			workers = append(workers, &worker)
 		}
 
-		firstPass := true
-		lastPass := false
-		for firstPass || (!lastPass && *loop) {
-			lastPass = len(lastPassChan) != 0
-			if lastPass {
-				log.Info("This will be the last pass")
-			}
-			firstPass = false
+		for loopState.Next() {
 			for _, w := range randomWorkers {
 				wg.Add(1)
 				go func(worker *verifier.RandomReadWorker) {
@@ -288,25 +299,20 @@ func main() {
 			}
 			wg.Wait()
 		}
-	}
+	} else if *cgReaders > 0 {
+		if *loop && *cgName != "" {
+			util.Die("Cannot use -loop and -consumer_group_name together")
+		}
 
-	if *cgReaders > 0 {
 		grw := verifier.NewGroupReadWorker(
 			verifier.NewGroupReadConfig(
-				makeWorkerConfig(), "groupReader", nPartitions, *cgReaders,
+				makeWorkerConfig(), *cgName, nPartitions, *cgReaders,
 				*seqConsumeCount, (*consumeTputMb)*1024*1024))
 		workers = append(workers, &grw)
 
-		firstPass := true
-		lastPass := false
-		for firstPass || (!lastPass && *loop) {
+		for loopState.Next() {
 			log.Info("Starting group read pass")
-			lastPass = len(lastPassChan) != 0
-			if lastPass {
-				log.Info("This will be the last pass")
-			}
-			firstPass = false
-			waitErr := grw.Wait()
+			waitErr := grw.Wait(ctx)
 			util.Chk(waitErr, "Consumer error: %v", err)
 		}
 	}
