@@ -237,6 +237,12 @@ func main() {
 		}
 	}()
 
+	if *useTransactions && *msgsPerProducerId > 0 {
+		// This is not supported because producer id churn, with async tx markers makes it impossible
+		// to track bad offsets. In the future we might want to relax this constraint.
+		util.Die("Cannot use -use-transactions and -msgs-per-producer-id together")
+	}
+
 	if *pCount > 0 {
 		log.Info("Starting producer...")
 		pwc := verifier.NewProducerConfig(makeWorkerConfig(), "producer", nPartitions, *mSize, *pCount, *fakeTimestampMs, *fakeTimestampStepMs, (*produceRateLimitBps), *keySetCardinality, *msgsPerProducerId)

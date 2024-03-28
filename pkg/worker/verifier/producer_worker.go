@@ -62,6 +62,7 @@ type ProducerWorker struct {
 
 	// Used for enabling transactional produces
 	transactionsEnabled  bool
+	transactionalId      string
 	transactionSTMConfig worker.TransactionSTMConfig
 	transactionSTM       *worker.TransactionSTM
 	churnProducers       bool
@@ -90,6 +91,13 @@ func NewProducerWorker(cfg ProducerConfig) ProducerWorker {
 func (v *ProducerWorker) EnableTransactions(config worker.TransactionSTMConfig) {
 	v.transactionSTMConfig = config
 	v.transactionsEnabled = true
+
+	v.churnTransactionalId()
+}
+
+func (pw *ProducerWorker) churnTransactionalId() {
+	pw.transactionalId = "p" + uuid.New().String()
+	log.Debugf("Configuring transactions with TransactionalID %s", pw.transactionalId)
 }
 
 func (pw *ProducerWorker) newRecord(producerId int, sequence int64) *kgo.Record {
@@ -259,12 +267,8 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 	}...)
 
 	if pw.transactionsEnabled {
-		randId := uuid.New()
-		tid := "p" + randId.String()
-		log.Debugf("Configuring transactions with TransactionalID %s", tid)
-
 		opts = append(opts, []kgo.Opt{
-			kgo.TransactionalID(tid),
+			kgo.TransactionalID(pw.transactionalId),
 			kgo.TransactionTimeout(2 * time.Minute),
 		}...)
 	}
@@ -371,6 +375,12 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 			pw.Status.lastCheckpoint = time.Now()
 			pw.produceCheckpoint()
 		}
+
+		if pw.churnProducers && pw.Status.Sent > 0 && pw.Status.Sent%int64(pw.config.messagesPerProducerId) == 0 {
+			pw.churnTransactionalId()
+			break
+		}
+
 	}
 
 	if pw.transactionsEnabled {
@@ -384,7 +394,6 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 	log.Info("Waiting...")
 	wg.Wait()
 	log.Info("Waited.")
-	wg.Wait()
 	close(bad_offsets)
 
 	log.Info("Closing client...")
