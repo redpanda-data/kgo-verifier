@@ -354,7 +354,7 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 				errored = true
 				log.Debugf("errored = %t", errored)
 			} else {
-				ackLatency := time.Now().Sub(sentAt)
+				ackLatency := time.Since(sentAt)
 				pw.Status.OnAcked(r.Partition, r.Offset)
 				pw.Status.latency.Update(ackLatency.Microseconds())
 				log.Debugf("Wrote partition %d at %d", r.Partition, r.Offset)
