@@ -68,8 +68,10 @@ type ProducerWorker struct {
 	transactionSTMConfig worker.TransactionSTMConfig
 	transactionSTM       *worker.TransactionSTM
 	churnProducers       bool
+	trackTxMarkers       bool
 
-	tolerateDataLoss bool
+	tolerateDataLoss      bool
+	gracefulStopRequested bool
 }
 
 func NewProducerWorker(cfg ProducerConfig) ProducerWorker {
@@ -95,6 +97,10 @@ func (v *ProducerWorker) EnableTransactions(config worker.TransactionSTMConfig) 
 	v.transactionsEnabled = true
 
 	v.churnTransactionalId()
+}
+
+func (pw *ProducerWorker) TrackTxMarkers(v bool) {
+	pw.trackTxMarkers = v
 }
 
 func (pw *ProducerWorker) churnTransactionalId() {
@@ -229,14 +235,17 @@ func (pw *ProducerWorker) produceCheckpoint() {
 	log.Infof("Producer status: %s", data)
 }
 
-func (pw *ProducerWorker) Wait() error {
+// Wait for the context to be cancelled, or for the producer to
+// have sent all messages. The context is used to signal graceful
+// shutdown request.
+func (pw *ProducerWorker) Wait(ctx context.Context) error {
 	pw.Status.Active = true
 	defer func() { pw.Status.Active = false }()
 
 	n := int64(pw.config.messageCount)
 
-	for {
-		n_produced, bad_offsets, err := pw.produceInner(n)
+	for !pw.gracefulStopRequested {
+		n_produced, bad_offsets, err := pw.produceInner(ctx, n)
 		if err != nil {
 			return err
 		}
@@ -253,6 +262,8 @@ func (pw *ProducerWorker) Wait() error {
 			pw.Status.Restarts += 1
 		}
 	}
+
+	return nil
 }
 
 type BadOffset struct {
@@ -260,7 +271,7 @@ type BadOffset struct {
 	O int64
 }
 
-func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
+func (pw *ProducerWorker) produceInner(ctx context.Context, n int64) (int64, []BadOffset, error) {
 	opts := pw.config.workerCfg.MakeKgoOpts()
 
 	opts = append(opts, []kgo.Opt{
@@ -308,6 +319,11 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 	}
 
 	for i := int64(0); i < n && len(bad_offsets) == 0; i = i + 1 {
+		pw.gracefulStopRequested = (ctx.Err() == context.Canceled)
+		if pw.gracefulStopRequested {
+			break
+		}
+
 		concurrent.Acquire(context.Background(), 1)
 		produced += 1
 		pw.Status.Sent += 1
@@ -322,7 +338,7 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 				break
 			}
 
-			if addedControlMarkers > 0 {
+			if addedControlMarkers > 0 && pw.trackTxMarkers {
 				for i, _ := range nextOffset {
 					for j := int64(0); j < int64(addedControlMarkers); j = j + 1 {
 						pw.validOffsets.Insert(p, nextOffset[i]+j)
@@ -363,7 +379,7 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 				} else {
 					util.Chk(err, "Produce failed: %v", err)
 				}
-			} else if expectOffset != r.Offset {
+			} else if pw.trackTxMarkers && expectOffset != r.Offset {
 				log.Warnf("Produced at unexpected offset %d (expected %d) on partition %d", r.Offset, expectOffset, r.Partition)
 				pw.Status.OnBadOffset()
 				bad_offsets <- BadOffset{r.Partition, r.Offset}

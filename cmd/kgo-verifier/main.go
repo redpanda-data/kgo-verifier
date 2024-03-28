@@ -66,6 +66,11 @@ var (
 	useTransactions      = flag.Bool("use-transactions", false, "Use a transactional producer. Consumer with ReadComitted isolation level.")
 	transactionAbortRate = flag.Float64("transaction-abort-rate", 0.0, "The probability that any given transaction should abort")
 	msgsPerTransaction   = flag.Uint("msgs-per-transaction", 1, "The number of messages that should be in a given transaction")
+	trackTxMarkers       = flag.Bool("track-tx-markers", true,
+		`Transactional Producer: If true, tx markers are tracked and
+all produced offsets are validated. It makes sense to disable
+it when it is expected for transactions to fail (node crashes)
+and we can't predict exactly where new produced offsets will be.`)
 
 	compressionType     = flag.String("compression-type", "", "One of none, gzip, snappy, lz4, zstd, or 'mixed' to pick a random codec for each producer")
 	compressiblePayload = flag.Bool("compressible-payload", false, "If true, use a highly compressible payload instead of the default random payload")
@@ -230,7 +235,7 @@ func main() {
 	loopState := util.NewLoopState(*loop)
 	go func() {
 		<-lastPassChan
-		if *continuous {
+		if *continuous || *pCount > 0 {
 			cancel()
 		} else {
 			loopState.RequestLastPass()
@@ -251,10 +256,11 @@ func main() {
 		if *useTransactions {
 			tconfig := worker.NewTransactionSTMConfig(*transactionAbortRate, *msgsPerTransaction)
 			pw.EnableTransactions(tconfig)
+			pw.TrackTxMarkers(*trackTxMarkers)
 		}
 
 		workers = append(workers, &pw)
-		waitErr := pw.Wait()
+		waitErr := pw.Wait(ctx)
 		util.Chk(err, "Producer error: %v", waitErr)
 		log.Info("Finished producer.")
 	} else if *seqRead {
