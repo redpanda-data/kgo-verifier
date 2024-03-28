@@ -17,7 +17,9 @@ func LoadTopicOffsetRanges(topic string, nPartitions int32) TopicOffsetRanges {
 		log.Warnf("Can't read topic offset ranges: %v", err)
 		return NewTopicOffsetRanges(topic, nPartitions)
 	} else {
-		var tors TopicOffsetRanges
+		tors := TopicOffsetRanges{
+			topic: topic,
+		}
 		if len(data) > 0 {
 			err = json.Unmarshal(data, &tors)
 			util.Chk(err, "Bad JSON %v", err)
