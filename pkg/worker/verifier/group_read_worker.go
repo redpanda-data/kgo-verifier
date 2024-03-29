@@ -2,6 +2,7 @@ package verifier
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -15,7 +16,7 @@ import (
 
 type GroupReadConfig struct {
 	workerCfg      worker.WorkerConfig
-	name           string
+	groupName      string
 	nPartitions    int32
 	nReaders       int
 	maxReadCount   int
@@ -27,7 +28,7 @@ func NewGroupReadConfig(
 	maxReadCount int, rateLimitBytes int) GroupReadConfig {
 	return GroupReadConfig{
 		workerCfg:      wc,
-		name:           name,
+		groupName:      name,
 		nPartitions:    nPartitions,
 		nReaders:       nReaders,
 		maxReadCount:   maxReadCount,
@@ -78,9 +79,14 @@ func NewConsumerGroupOffsets(
 	maxReadCount int,
 	rateLimitBytes int,
 	cancelFunc context.CancelFunc) ConsumerGroupOffsets {
-	lastSeen := make([]int64, len(hwms))
-	upTo := make([]int64, len(hwms))
-	copy(upTo, hwms)
+
+	var lastSeen, upTo []int64
+	if len(hwms) > 0 {
+		lastSeen = make([]int64, len(hwms))
+		upTo = make([]int64, len(hwms))
+		copy(upTo, hwms)
+	}
+
 	var rlimiter *rate.Limiter
 	if rateLimitBytes > 0 {
 		rlimiter = rate.NewLimiter(rate.Limit(rateLimitBytes), rateLimitBytes)
@@ -104,63 +110,72 @@ func (cgs *ConsumerGroupOffsets) AddRecord(ctx context.Context, r *kgo.Record) {
 
 	cgs.curReadCount += 1
 
-	if r.Offset > cgs.lastSeen[r.Partition] {
-		cgs.lastSeen[r.Partition] = r.Offset
-	}
-
 	if cgs.maxReadCount >= 0 && cgs.curReadCount >= cgs.maxReadCount {
 		cgs.cancelFunc()
 		return
 	}
 
-	if cgs.lastSeen[r.Partition] >= cgs.upTo[r.Partition]-1 {
-		allComplete := true
-		for p, hwm := range cgs.upTo {
-			if cgs.lastSeen[p] < hwm-1 {
-				allComplete = false
-				break
-			}
+	if len(cgs.upTo) > 0 {
+		if r.Offset > cgs.lastSeen[r.Partition] {
+			cgs.lastSeen[r.Partition] = r.Offset
 		}
-		if allComplete {
-			cgs.cancelFunc()
+
+		if cgs.lastSeen[r.Partition] >= cgs.upTo[r.Partition]-1 {
+			allComplete := true
+			for p, hwm := range cgs.upTo {
+				if cgs.lastSeen[p] < hwm-1 {
+					allComplete = false
+					break
+				}
+			}
+			if allComplete {
+				cgs.cancelFunc()
+			}
 		}
 	}
 }
 
-func (grw *GroupReadWorker) Wait() error {
+func (grw *GroupReadWorker) Wait(ctx context.Context) error {
 	grw.Status.Active = true
 	defer func() { grw.Status.Active = false }()
 
-	client, err := kgo.NewClient(grw.config.workerCfg.MakeKgoOpts()...)
-	if err != nil {
-		log.Errorf("Error constructing client: %v", err)
-		return err
-	}
+	var hwms []int64
+	if !grw.config.workerCfg.Continuous {
+		client, err := kgo.NewClient(grw.config.workerCfg.MakeKgoOpts()...)
+		if err != nil {
+			log.Errorf("Error constructing client: %v", err)
+			return err
+		}
 
-	startOffsets := GetOffsets(client, grw.config.workerCfg.Topic, grw.config.nPartitions, -2)
-	hwms := GetOffsets(client, grw.config.workerCfg.Topic, grw.config.nPartitions, -1)
-	client.Close()
+		startOffsets := GetOffsets(client, grw.config.workerCfg.Topic, grw.config.nPartitions, -2)
+		hwms = GetOffsets(client, grw.config.workerCfg.Topic, grw.config.nPartitions, -1)
+		client.Close()
 
-	hasMessages := false
-	for p := 0; p < int(grw.config.nPartitions); p++ {
-		if startOffsets[p] < hwms[p] {
-			hasMessages = true
-			break
+		hasMessages := false
+		for p := 0; p < int(grw.config.nPartitions); p++ {
+			if startOffsets[p] < hwms[p] {
+				hasMessages = true
+				break
+			}
+		}
+
+		if !hasMessages {
+			log.Infof("Topic is empty, exiting...")
+			return nil
 		}
 	}
 
-	if !hasMessages {
-		log.Infof("Topic is empty, exiting...")
-		return nil
+	groupName := grw.config.groupName
+	if grw.config.groupName == "" {
+		groupName = fmt.Sprintf(
+			"kgo-verifier-%d-%d-%d", time.Now().Unix(), os.Getpid(), grw.Status.runCount)
 	}
 
-	groupName := fmt.Sprintf(
-		"kgo-verifier-%d-%d-%d", time.Now().Unix(), os.Getpid(), grw.Status.runCount)
 	grw.Status.runCount += 1
 
 	log.Infof("Reading with consumer group %s", groupName)
 
-	ctx, cancelFunc := context.WithCancel(context.Background())
+	ctx, cancelFunc := context.WithCancel(ctx)
 	cgOffsets := NewConsumerGroupOffsets(
 		hwms, grw.config.maxReadCount, grw.config.rateLimitBytes, cancelFunc)
 
@@ -239,7 +254,13 @@ func (grw *GroupReadWorker) consumerGroupReadInner(
 			log.Warnf(
 				"fiber %v: Consumer group fetch %s/%d e=%v...",
 				fiberId, t, p, err)
-			r_err = err
+			var lossErr *kgo.ErrDataLoss
+			if grw.config.workerCfg.TolerateDataLoss && errors.As(err, &lossErr) {
+				grw.Status.Validator.RecordLostOffsets(lossErr.Partition, lossErr.ConsumedTo-lossErr.ResetTo)
+				grw.Status.Validator.SetMonotonicityTestStateForPartition(p, lossErr.ResetTo-1)
+			} else {
+				r_err = err
+			}
 		})
 
 		if r_err != nil {

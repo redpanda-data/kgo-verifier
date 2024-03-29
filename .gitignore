@@ -3,3 +3,4 @@ kgo-verifier
 valid_offsets*.json
 
 .idea
+.vscode

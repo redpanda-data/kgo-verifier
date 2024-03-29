@@ -2,6 +2,7 @@ package verifier
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	worker "github.com/redpanda-data/kgo-verifier/pkg/worker"
@@ -49,28 +50,31 @@ func NewSeqReadWorker(cfg SeqReadConfig) SeqReadWorker {
 	}
 }
 
-func (srw *SeqReadWorker) Wait() error {
+func (srw *SeqReadWorker) Wait(ctx context.Context) error {
 	srw.Status.Active = true
 	defer func() { srw.Status.Active = false }()
 
-	client, err := kgo.NewClient(srw.config.workerCfg.MakeKgoOpts()...)
-	if err != nil {
-		log.Errorf("Error constructing client: %v", err)
-		return err
-	}
-
-	hwm := GetOffsets(client, srw.config.workerCfg.Topic, srw.config.nPartitions, -1)
 	lwm := make([]int64, srw.config.nPartitions)
-	client.Close()
+	var hwm []int64
+
+	if !srw.config.workerCfg.Continuous {
+		client, err := kgo.NewClient(srw.config.workerCfg.MakeKgoOpts()...)
+		if err != nil {
+			log.Errorf("Error constructing client: %v", err)
+			return err
+		}
+		hwm = GetOffsets(client, srw.config.workerCfg.Topic, srw.config.nPartitions, -1)
+		client.Close()
+	}
 
 	for {
 		var err error
-		lwm, err = srw.sequentialReadInner(lwm, hwm)
-		if err != nil {
+		lwm, err = srw.sequentialReadInner(ctx, lwm, hwm)
+		if err == nil || ctx.Err() == context.Canceled {
+			break
+		} else if err != nil {
 			log.Warnf("Restarting reader for error %v", err)
 			// Loop around
-		} else {
-			break
 		}
 	}
 
@@ -79,7 +83,7 @@ func (srw *SeqReadWorker) Wait() error {
 	return nil
 }
 
-func (srw *SeqReadWorker) sequentialReadInner(startAt []int64, upTo []int64) ([]int64, error) {
+func (srw *SeqReadWorker) sequentialReadInner(ctx context.Context, startAt []int64, upTo []int64) ([]int64, error) {
 	log.Infof("Sequential read start offsets: %v", startAt)
 	log.Infof("Sequential read end offsets: %v", upTo)
 
@@ -89,8 +93,10 @@ func (srw *SeqReadWorker) sequentialReadInner(startAt []int64, upTo []int64) ([]
 	for i, o := range startAt {
 		partOffsets[int32(i)] = kgo.NewOffset().At(o)
 		log.Infof("Sequential start offset %s/%d  %#v...", srw.config.workerCfg.Topic, i, partOffsets[int32(i)])
-		if o == upTo[i] {
-			complete[i] = true
+		if len(upTo) > 0 {
+			if o == upTo[i] {
+				complete[i] = true
+			}
 		}
 	}
 	offsets[srw.config.workerCfg.Topic] = partOffsets
@@ -128,13 +134,19 @@ func (srw *SeqReadWorker) sequentialReadInner(startAt []int64, upTo []int64) ([]
 
 	for {
 		log.Debugf("Calling PollFetches (lwm=%v status %s)", lwm, srw.Status.Validator.String())
-		fetches := client.PollFetches(context.Background())
+		fetches := client.PollFetches(ctx)
 		log.Debugf("PollFetches returned %d fetches", len(fetches))
 
 		var r_err error
 		fetches.EachError(func(t string, p int32, err error) {
 			log.Warnf("Sequential fetch %s/%d e=%v...", t, p, err)
-			r_err = err
+			var lossErr *kgo.ErrDataLoss
+			if srw.config.workerCfg.TolerateDataLoss && errors.As(err, &lossErr) {
+				srw.Status.Validator.RecordLostOffsets(lossErr.Partition, lossErr.ConsumedTo-lossErr.ResetTo)
+				srw.Status.Validator.SetMonotonicityTestStateForPartition(p, lossErr.ResetTo-1)
+			} else {
+				r_err = err
+			}
 		})
 
 		if r_err != nil {
@@ -146,7 +158,7 @@ func (srw *SeqReadWorker) sequentialReadInner(startAt []int64, upTo []int64) ([]
 
 		fetches.EachRecord(func(r *kgo.Record) {
 			if rlimiter != nil {
-				rlimiter.WaitN(context.Background(), len(r.Value))
+				rlimiter.WaitN(ctx, len(r.Value))
 			}
 
 			log.Debugf("Sequential read %s/%d o=%d...", srw.config.workerCfg.Topic, r.Partition, r.Offset)
@@ -157,8 +169,10 @@ func (srw *SeqReadWorker) sequentialReadInner(startAt []int64, upTo []int64) ([]
 				lwm[r.Partition] = r.Offset + 1
 			}
 
-			if r.Offset >= upTo[r.Partition]-1 {
-				complete[r.Partition] = true
+			if len(upTo) > 0 {
+				if r.Offset >= upTo[r.Partition]-1 {
+					complete[r.Partition] = true
+				}
 			}
 
 			// We subscribe to control records to make consuming-to-offset work, but we
