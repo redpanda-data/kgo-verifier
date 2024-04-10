@@ -115,12 +115,9 @@ func main() {
 		topicsList = strings.Split(*topic, ",")
 	}
 
-	wConfig := worker.NewWorkerConfig(
-		"kgo", *brokers, *trace, topicsList[0], *linger, *maxBufferedRecords, *useTransactions, *compressionType, *compressiblePayload, *username, *password, *enableTls)
-	opts := wConfig.MakeKgoOpts()
-	opts = append(opts, []kgo.Opt{
-		kgo.ProducerBatchMaxBytes(1024 * 1024),
-	}...)
+	if *group == "" {
+		panic("A consumer group must be provided via the -group flag")
+	}
 
 	dataInFlightPerWorker := (*initialDataMb * 1024 * 1024) / uint64(*workers)
 

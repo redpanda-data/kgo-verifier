@@ -276,10 +276,6 @@ func (v *Worker) Init() {
 			kgo.ConsumerGroup(v.config.Group),
 		}...)
 
-		if v.config.Group != "" {
-			opts = append(opts, kgo.ConsumerGroup(v.config.Group))
-		}
-
 		client, err := kgo.NewClient(opts...)
 		util.Chk(err, "unable to initialize client: %v", err)
 		v.client = client
