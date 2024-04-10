@@ -115,6 +115,10 @@ func main() {
 		topicsList = strings.Split(*topic, ",")
 	}
 
+	if *group == "" {
+		panic("A consumer group must be provided via the -group flag")
+	}
+
 	dataInFlightPerWorker := (*initialDataMb * 1024 * 1024) / uint64(*workers)
 
 	if dataInFlightPerWorker / *payloadSize <= 0 {
