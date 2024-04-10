@@ -315,6 +315,8 @@ func main() {
 			waitErr := grw.Wait(ctx)
 			util.Chk(waitErr, "Consumer error: %v", err)
 		}
+	} else {
+		util.Die("No valid operation specified (use one of -produce_msgs, -rand_read_msgs , -seq_read, -consumer_group_readers)")
 	}
 
 	if *remote {
