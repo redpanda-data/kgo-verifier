@@ -254,7 +254,6 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 	opts := pw.config.workerCfg.MakeKgoOpts()
 
 	opts = append(opts, []kgo.Opt{
-		kgo.RequiredAcks(kgo.AllISRAcks()),
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
 	}...)
 

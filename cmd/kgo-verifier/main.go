@@ -62,6 +62,7 @@ var (
 	produceRateLimitBps = flag.Int("produce-throughput-bps", -1, "Producer: set max throughput in bytes/s")
 	keySetCardinality   = flag.Int("key-set-cardinality", -1, "Cardinality of a set of possible record keys (makes data compactible)")
 	msgsPerProducerId   = flag.Int("msgs-per-producer-id", -1, "Number of messages produced before creating new Producer Client.  (used to generate many producer ids)")
+	acks                = flag.Int("acks", -1, "Requested Kafka ACKS level. Possible values are 1,-1, 0")
 
 	useTransactions      = flag.Bool("use-transactions", false, "Use a transactional producer. Consumer with ReadComitted isolation level.")
 	transactionAbortRate = flag.Float64("transaction-abort-rate", 0.0, "The probability that any given transaction should abort")
@@ -73,7 +74,7 @@ var (
 	tolerateDataLoss = flag.Bool("tolerate-data-loss", false, "If true, tolerate data-loss events")
 )
 
-func makeWorkerConfig() worker.WorkerConfig {
+func makeWorkerConfig(acks kgo.Acks) worker.WorkerConfig {
 	c := worker.WorkerConfig{
 		Brokers:             *brokers,
 		Trace:               *trace,
@@ -90,6 +91,7 @@ func makeWorkerConfig() worker.WorkerConfig {
 		CompressiblePayload: *compressiblePayload,
 		TolerateDataLoss:    *tolerateDataLoss,
 		Continuous:          *continuous,
+		Acks:                acks,
 	}
 
 	return c
@@ -112,7 +114,11 @@ func main() {
 	if *remote {
 		signal.Notify(signalChan, os.Interrupt)
 	}
+	kgoAcks, err := util.MakeAcks(*acks)
 
+	if err != nil {
+		log.Panicf("%x", err)
+	}
 	// Once we are done, keep the process alive until this channel is fired
 	shutdownChan := make(chan int, 1)
 
@@ -121,7 +127,7 @@ func main() {
 	lastPassChan := make(chan int, 1)
 
 	log.Info("Getting topic metadata...")
-	conf := makeWorkerConfig()
+	conf := makeWorkerConfig(kgoAcks)
 	opts := conf.MakeKgoOpts()
 	client, err := kgo.NewClient(opts...)
 	util.Chk(err, "Error creating kafka client: %v", err)
@@ -243,7 +249,7 @@ func main() {
 
 	if *pCount > 0 {
 		log.Info("Starting producer...")
-		pwc := verifier.NewProducerConfig(makeWorkerConfig(), "producer", nPartitions, *mSize, *pCount, *fakeTimestampMs, *fakeTimestampStepMs, (*produceRateLimitBps), *keySetCardinality, *msgsPerProducerId)
+		pwc := verifier.NewProducerConfig(makeWorkerConfig(kgoAcks), "producer", nPartitions, *mSize, *pCount, *fakeTimestampMs, *fakeTimestampStepMs, (*produceRateLimitBps), *keySetCardinality, *msgsPerProducerId)
 		pw := verifier.NewProducerWorker(pwc)
 
 		if *useTransactions {
@@ -257,7 +263,7 @@ func main() {
 		log.Info("Finished producer.")
 	} else if *seqRead {
 		srw := verifier.NewSeqReadWorker(verifier.NewSeqReadConfig(
-			makeWorkerConfig(), "sequential", nPartitions, *seqConsumeCount,
+			makeWorkerConfig(kgoAcks), "sequential", nPartitions, *seqConsumeCount,
 			(*consumeTputMb)*1024*1024,
 		))
 		workers = append(workers, &srw)
@@ -276,7 +282,7 @@ func main() {
 		var randomWorkers []*verifier.RandomReadWorker
 		for i := 0; i < *parallelRead; i++ {
 			workerCfg := verifier.NewRandomReadConfig(
-				makeWorkerConfig(), fmt.Sprintf("random-%03d", i), nPartitions, *cCount,
+				makeWorkerConfig(kgoAcks), fmt.Sprintf("random-%03d", i), nPartitions, *cCount,
 			)
 			worker := verifier.NewRandomReadWorker(workerCfg)
 			randomWorkers = append(randomWorkers, &worker)
@@ -306,7 +312,7 @@ func main() {
 
 		grw := verifier.NewGroupReadWorker(
 			verifier.NewGroupReadConfig(
-				makeWorkerConfig(), *cgName, nPartitions, *cgReaders,
+				makeWorkerConfig(kgoAcks), *cgName, nPartitions, *cgReaders,
 				*seqConsumeCount, (*consumeTputMb)*1024*1024))
 		workers = append(workers, &grw)
 
