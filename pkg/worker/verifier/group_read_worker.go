@@ -15,24 +15,26 @@ import (
 )
 
 type GroupReadConfig struct {
-	workerCfg      worker.WorkerConfig
-	groupName      string
-	nPartitions    int32
-	nReaders       int
-	maxReadCount   int
-	rateLimitBytes int
+	workerCfg        worker.WorkerConfig
+	groupName        string
+	nPartitions      int32
+	nReaders         int
+	maxReadCount     int
+	rateLimitBytes   int
+	commitAfterFetch bool
 }
 
 func NewGroupReadConfig(
 	wc worker.WorkerConfig, name string, nPartitions int32, nReaders int,
-	maxReadCount int, rateLimitBytes int) GroupReadConfig {
+	maxReadCount int, rateLimitBytes int, commitAfterFetch bool) GroupReadConfig {
 	return GroupReadConfig{
-		workerCfg:      wc,
-		groupName:      name,
-		nPartitions:    nPartitions,
-		nReaders:       nReaders,
-		maxReadCount:   maxReadCount,
-		rateLimitBytes: rateLimitBytes,
+		workerCfg:        wc,
+		groupName:        name,
+		nPartitions:      nPartitions,
+		nReaders:         nReaders,
+		maxReadCount:     maxReadCount,
+		rateLimitBytes:   rateLimitBytes,
+		commitAfterFetch: commitAfterFetch,
 	}
 }
 
@@ -276,7 +278,13 @@ func (grw *GroupReadWorker) consumerGroupReadInner(
 			cgOffsets.AddRecord(ctx, r)
 		})
 
-		// Offsets will be committed on the next PollFetches invocation
+		// Otherwise offsets will be enqueued for commit on the next PollFetches invocation
+		// and the actual commit will happen in background respecting `kgo.AutoCommitInterval` (default: 5s).
+		if grw.config.commitAfterFetch {
+			if err := client.CommitUncommittedOffsets(ctx); err != nil {
+				return err
+			}
+		}
 	}
 
 	return nil
