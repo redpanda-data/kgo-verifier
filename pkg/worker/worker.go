@@ -157,8 +157,9 @@ type WorkerConfig struct {
 	// incompressible payload.
 	CompressiblePayload bool
 
-	TolerateDataLoss bool
-	Continuous bool
+	TolerateDataLoss      bool
+	TolerateFailedProduce bool
+	Continuous            bool
 }
 
 func CompressionCodecFromString(s string) (kgo.CompressionCodec, error) {
