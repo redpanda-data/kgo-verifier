@@ -59,7 +59,7 @@ func (cs *ValidatorStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffse
 	cs.lock.Lock()
 	defer cs.lock.Unlock()
 
-	if cs.lastLeaderEpoch[r.Partition] < r.LeaderEpoch {
+	if r.LeaderEpoch < cs.lastLeaderEpoch[r.Partition] {
 		log.Fatalf("Out of order leader epoch on p=%d at o=%d leaderEpoch=%d. Previous leaderEpoch=%d",
 			r.Partition, r.Offset, r.LeaderEpoch, cs.lastLeaderEpoch[r.Partition])
 	}
@@ -69,7 +69,8 @@ func (cs *ValidatorStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffse
 		got_header_value = string(r.Headers[0].Value)
 	}
 
-	if expect_header_value != got_header_value {
+	recordExpected := expect_header_value == got_header_value
+	if !recordExpected {
 		shouldBeValid := validRanges.Contains(r.Partition, r.Offset)
 
 		if shouldBeValid {
@@ -91,11 +92,12 @@ func (cs *ValidatorStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffse
 				log.Fatalf("Out of order read. Max consumed offset(partition=%d)=%d; Current record offset=%d", r.Partition, currentMax, r.Offset)
 			}
 		}
-		cs.recordOffset(r)
 
 		cs.ValidReads += 1
 		log.Debugf("Read OK (%s) on p=%d at o=%d", r.Headers[0].Value, r.Partition, r.Offset)
 	}
+
+	cs.recordOffset(r, recordExpected)
 
 	if time.Since(cs.lastCheckpoint) > time.Second*5 {
 		cs.Checkpoint()
@@ -103,7 +105,7 @@ func (cs *ValidatorStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffse
 	}
 }
 
-func (cs *ValidatorStatus) recordOffset(r *kgo.Record) {
+func (cs *ValidatorStatus) recordOffset(r *kgo.Record, recordExpected bool) {
 	if cs.MaxOffsetsConsumed == nil {
 		cs.MaxOffsetsConsumed = make(map[int32]int64)
 	}
@@ -114,7 +116,8 @@ func (cs *ValidatorStatus) recordOffset(r *kgo.Record) {
 		cs.lastLeaderEpoch = make(map[int32]int32)
 	}
 
-	if r.Offset > cs.MaxOffsetsConsumed[r.Partition] {
+	// We bump highest offset only for valid records.
+	if r.Offset > cs.MaxOffsetsConsumed[r.Partition] && recordExpected {
 		cs.MaxOffsetsConsumed[r.Partition] = r.Offset
 	}
 
