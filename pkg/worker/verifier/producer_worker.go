@@ -66,7 +66,8 @@ type ProducerWorker struct {
 	transactionSTM       *worker.TransactionSTM
 	churnProducers       bool
 
-	tolerateDataLoss bool
+	tolerateDataLoss      bool
+	tolerateFailedProduce bool
 }
 
 func NewProducerWorker(cfg ProducerConfig) ProducerWorker {
@@ -78,12 +79,13 @@ func NewProducerWorker(cfg ProducerConfig) ProducerWorker {
 	}
 
 	return ProducerWorker{
-		config:           cfg,
-		Status:           NewProducerWorkerStatus(cfg.workerCfg.Topic),
-		validOffsets:     validOffsets,
-		payload:          cfg.valueGenerator.Generate(),
-		churnProducers:   cfg.messagesPerProducerId > 0,
-		tolerateDataLoss: cfg.workerCfg.TolerateDataLoss,
+		config:                cfg,
+		Status:                NewProducerWorkerStatus(cfg.workerCfg.Topic),
+		validOffsets:          validOffsets,
+		payload:               cfg.valueGenerator.Generate(),
+		churnProducers:        cfg.messagesPerProducerId > 0,
+		tolerateDataLoss:      cfg.workerCfg.TolerateDataLoss,
+		tolerateFailedProduce: cfg.workerCfg.TolerateFailedProduce,
 	}
 }
 
@@ -148,6 +150,9 @@ type ProducerWorkerStatus struct {
 	// How many times did we restart the producer loop?
 	Restarts int64 `json:"restarts"`
 
+	// How many times produce request failed?
+	Fails int64 `json:"fails"`
+
 	// How many failures occured while trying to begin, abort,
 	// or commit a transaction.
 	FailedTransactions int64 `json:"failed_transactions"`
@@ -203,6 +208,12 @@ func (self *ProducerWorkerStatus) OnBadOffset() {
 	self.lock.Lock()
 	defer self.lock.Unlock()
 	self.BadOffsets += 1
+}
+
+func (self *ProducerWorkerStatus) OnFail() {
+	self.lock.Lock()
+	defer self.lock.Unlock()
+	self.Fails += 1
 }
 
 func (pw *ProducerWorker) produceCheckpoint() {
@@ -301,7 +312,7 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 		rlimiter = rate.NewLimiter(rate.Limit(pw.config.rateLimitBytes), pw.config.rateLimitBytes)
 	}
 
-	for i := int64(0); i < n && len(bad_offsets) == 0; i = i + 1 {
+	for i := int64(0); i < n && !errored; i = i + 1 {
 		concurrent.Acquire(context.Background(), 1)
 		produced += 1
 		pw.Status.Sent += 1
@@ -346,8 +357,16 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 		sentAt := time.Now()
 		handler := func(r *kgo.Record, err error) {
 			concurrent.Release(1)
-			util.Chk(err, "Produce failed: %v", err)
-			if expectOffset != r.Offset {
+
+			if err != nil {
+				pw.Status.OnFail()
+				errHandler := util.Die
+				if pw.tolerateFailedProduce {
+					errHandler = log.Warnf
+				}
+				errHandler("Produce failed: %v", err)
+				errored = true
+			} else if expectOffset != r.Offset {
 				log.Warnf("Produced at unexpected offset %d (expected %d) on partition %d", r.Offset, expectOffset, r.Partition)
 				pw.Status.OnBadOffset()
 				bad_offsets <- BadOffset{r.Partition, r.Offset}
@@ -399,8 +418,8 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 		for o := range bad_offsets {
 			r = append(r, o)
 		}
-		if len(r) == 0 && pw.Status.FailedTransactions == 0 {
-			util.Die("No bad offsets or failed transactions but errored?")
+		if len(r) == 0 && pw.Status.Fails == 0 && pw.Status.FailedTransactions == 0 {
+			util.Die("No bad offsets or failed produces or transactions but errored?")
 		}
 		successful_produced := produced - int64(len(r))
 		return successful_produced, r, nil

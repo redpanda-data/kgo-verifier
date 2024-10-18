@@ -70,26 +70,28 @@ var (
 	compressionType     = flag.String("compression-type", "", "One of none, gzip, snappy, lz4, zstd, or 'mixed' to pick a random codec for each producer")
 	compressiblePayload = flag.Bool("compressible-payload", false, "If true, use a highly compressible payload instead of the default random payload")
 
-	tolerateDataLoss = flag.Bool("tolerate-data-loss", false, "If true, tolerate data-loss events")
+	tolerateDataLoss      = flag.Bool("tolerate-data-loss", false, "If true, tolerate data-loss events")
+	tolerateFailedProduce = flag.Bool("tolerate-failed-produce", false, "If true, tolerate and retry failed produce")
 )
 
 func makeWorkerConfig() worker.WorkerConfig {
 	c := worker.WorkerConfig{
-		Brokers:             *brokers,
-		Trace:               *trace,
-		Topic:               *topic,
-		Linger:              *linger,
-		MaxBufferedRecords:  *maxBufferedRecords,
-		BatchMaxbytes:       uint(*batchMaxBytes),
-		SaslUser:            *username,
-		SaslPass:            *password,
-		UseTls:              *enableTls,
-		Name:                *name,
-		Transactions:        *useTransactions,
-		CompressionType:     *compressionType,
-		CompressiblePayload: *compressiblePayload,
-		TolerateDataLoss:    *tolerateDataLoss,
-		Continuous:          *continuous,
+		Brokers:               *brokers,
+		Trace:                 *trace,
+		Topic:                 *topic,
+		Linger:                *linger,
+		MaxBufferedRecords:    *maxBufferedRecords,
+		BatchMaxbytes:         uint(*batchMaxBytes),
+		SaslUser:              *username,
+		SaslPass:              *password,
+		UseTls:                *enableTls,
+		Name:                  *name,
+		Transactions:          *useTransactions,
+		CompressionType:       *compressionType,
+		CompressiblePayload:   *compressiblePayload,
+		TolerateDataLoss:      *tolerateDataLoss,
+		TolerateFailedProduce: *tolerateFailedProduce,
+		Continuous:            *continuous,
 	}
 
 	return c
