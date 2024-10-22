@@ -158,7 +158,12 @@ type WorkerConfig struct {
 	CompressiblePayload bool
 
 	TolerateDataLoss bool
-	Continuous bool
+	Continuous       bool
+	Acks             kgo.Acks
+}
+
+func (cfg *WorkerConfig) RelaxedConsistency() bool {
+	return cfg.Acks != kgo.AllISRAcks()
 }
 
 func CompressionCodecFromString(s string) (kgo.CompressionCodec, error) {
@@ -202,7 +207,6 @@ func (wc *WorkerConfig) MakeKgoOpts() []kgo.Opt {
 
 		kgo.ProducerBatchMaxBytes(int32(wc.BatchMaxbytes)),
 		kgo.MaxBufferedRecords(int(wc.MaxBufferedRecords)),
-		kgo.RequiredAcks(kgo.AllISRAcks()),
 	}
 
 	if wc.CompressionType != "" {
@@ -253,12 +257,16 @@ func (wc *WorkerConfig) MakeKgoOpts() []kgo.Opt {
 			return fmt.Sprintf("time=\"%s\" name=%s", time.Now().UTC().Format(time.RFC3339), wc.Name)
 		})))
 	}
+	opts = append(opts, kgo.RequiredAcks(wc.Acks))
+	if wc.Acks != kgo.AllISRAcks() {
+		opts = append(opts, kgo.DisableIdempotentWrite())
+	}
 
 	return opts
 }
 
 func NewWorkerConfig(name string, brokers string, trace bool, topic string, linger time.Duration, maxBufferedRecords uint, transactions bool,
-	compressionType string, commpressiblePayload bool, username string, password string, useTls bool) WorkerConfig {
+	compressionType string, commpressiblePayload bool, username string, password string, useTls bool, acks kgo.Acks) WorkerConfig {
 	return WorkerConfig{
 		Name:                name,
 		Brokers:             brokers,
@@ -272,5 +280,6 @@ func NewWorkerConfig(name string, brokers string, trace bool, topic string, ling
 		Transactions:        transactions,
 		CompressionType:     compressionType,
 		CompressiblePayload: commpressiblePayload,
+		Acks:                acks,
 	}
 }
