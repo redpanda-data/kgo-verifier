@@ -102,6 +102,10 @@ func (srw *SeqReadWorker) sequentialReadInner(ctx context.Context, startAt []int
 	offsets[srw.config.workerCfg.Topic] = partOffsets
 
 	validRanges := LoadTopicOffsetRanges(srw.config.workerCfg.Topic, srw.config.nPartitions)
+	var latestValuesProduced LatestValueMap
+	if srw.Status.Validator.expectFullyCompacted {
+		latestValuesProduced = LoadLatestValues(srw.config.workerCfg.Topic, srw.config.nPartitions)
+	}
 
 	opts := srw.config.workerCfg.MakeKgoOpts()
 	opts = append(opts, []kgo.Opt{
@@ -180,7 +184,7 @@ func (srw *SeqReadWorker) sequentialReadInner(ctx context.Context, startAt []int
 			if r.Attrs.IsControl() {
 				return
 			}
-			srw.Status.Validator.ValidateRecord(r, &validRanges)
+			srw.Status.Validator.ValidateRecord(r, &validRanges, &latestValuesProduced)
 		})
 
 		if srw.config.maxReadCount >= 0 && curReadCount >= srw.config.maxReadCount {

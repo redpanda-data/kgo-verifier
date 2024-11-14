@@ -240,6 +240,10 @@ func (grw *GroupReadWorker) consumerGroupReadInner(
 	defer client.Close()
 
 	validRanges := LoadTopicOffsetRanges(grw.config.workerCfg.Topic, grw.config.nPartitions)
+	var latestValuesProduced LatestValueMap
+	if grw.Status.Validator.expectFullyCompacted {
+		latestValuesProduced = LoadLatestValues(grw.config.workerCfg.Topic, grw.config.nPartitions)
+	}
 
 	for {
 		fetches := client.PollFetches(ctx)
@@ -271,7 +275,7 @@ func (grw *GroupReadWorker) consumerGroupReadInner(
 			log.Debugf(
 				"fiber %v: Consumer group read %s/%d o=%d...",
 				fiberId, grw.config.workerCfg.Topic, r.Partition, r.Offset)
-			grw.Status.Validator.ValidateRecord(r, &validRanges)
+			grw.Status.Validator.ValidateRecord(r, &validRanges, &latestValuesProduced)
 			// Will cancel the context if we have read everything
 			cgOffsets.AddRecord(ctx, r)
 		})

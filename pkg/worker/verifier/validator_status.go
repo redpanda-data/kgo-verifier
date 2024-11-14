@@ -11,12 +11,12 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-func NewValidatorStatus(compacted bool) ValidatorStatus {
+func NewValidatorStatus(compacted bool, expectFullyCompacted bool, topic string, nPartitions int32) ValidatorStatus {
 	return ValidatorStatus{
-		MaxOffsetsConsumed: make(map[int32]int64),
-
-		lastCheckpoint: time.Now(),
-		compacted:      compacted,
+		MaxOffsetsConsumed:   make(map[int32]int64),
+		lastCheckpoint:       time.Now(),
+		compacted:            compacted,
+		expectFullyCompacted: expectFullyCompacted,
 	}
 }
 
@@ -54,17 +54,17 @@ type ValidatorStatus struct {
 	// Last consumed offset per partition. Used to assert monotonicity and check for gaps.
 	lastOffsetConsumed map[int32]int64
 
-	// The latest offset seen for a given key. Used to help track the latest key-value pair that should be seen.
-	lastOffsetPerKeyConsumed map[string]int64
-
 	// Last leader epoch per partition. Used to assert monotonicity.
 	lastLeaderEpoch map[int32]int32
 
 	// Whether the topic to be consumed is compacted. Gaps in offsets will be ignored if true.
 	compacted bool
+
+	// Whether the values consumed should be verified against the last produced value for a given key in the log.
+	expectFullyCompacted bool
 }
 
-func (cs *ValidatorStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffsetRanges) {
+func (cs *ValidatorStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffsetRanges, latestValuesProduced *LatestValueMap) {
 	expect_header_value := fmt.Sprintf("%06d.%018d", 0, r.Offset)
 	log.Debugf("Consumed %s on p=%d at o=%d leaderEpoch=%d", r.Key, r.Partition, r.Offset, r.LeaderEpoch)
 	cs.lock.Lock()
@@ -112,6 +112,13 @@ func (cs *ValidatorStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffse
 		log.Debugf("Read OK (%s) on p=%d at o=%d", r.Headers[0].Value, r.Partition, r.Offset)
 	}
 
+	if cs.expectFullyCompacted {
+		latestValue, exists := latestValuesProduced.Get(r.Partition, string(r.Key))
+		if !exists || latestValue != string(r.Value) {
+			log.Panicf("Consumed value for key %s does not match the latest produced value in a compacted topic- did compaction for partition %s/%d occur betwen producing and consuming?", r.Key, r.Topic, r.Partition)
+		}
+	}
+
 	cs.recordOffset(r, recordExpected)
 
 	if time.Since(cs.lastCheckpoint) > time.Second*5 {
@@ -130,7 +137,6 @@ func (cs *ValidatorStatus) recordOffset(r *kgo.Record, recordExpected bool) {
 	if cs.lastLeaderEpoch == nil {
 		cs.lastLeaderEpoch = make(map[int32]int32)
 	}
-
 	// We bump highest offset only for valid records.
 	if r.Offset > cs.MaxOffsetsConsumed[r.Partition] && recordExpected {
 		cs.MaxOffsetsConsumed[r.Partition] = r.Offset

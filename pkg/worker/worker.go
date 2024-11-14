@@ -165,6 +165,7 @@ type WorkerConfig struct {
 	TolerateDataLoss      bool
 	TolerateFailedProduce bool
 	Continuous            bool
+	ValidateLatestValues  bool
 }
 
 func CompressionCodecFromString(s string) (kgo.CompressionCodec, error) {

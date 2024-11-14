@@ -91,6 +91,10 @@ func (w *RandomReadWorker) Wait() error {
 	}
 
 	validRanges := LoadTopicOffsetRanges(w.config.workerCfg.Topic, w.config.nPartitions)
+	var latestValuesProduced LatestValueMap
+	if w.Status.Validator.expectFullyCompacted {
+		latestValuesProduced = LoadLatestValues(w.config.workerCfg.Topic, w.config.nPartitions)
+	}
 
 	ctxLog := log.WithFields(log.Fields{"tag": w.config.name})
 
@@ -98,7 +102,7 @@ func (w *RandomReadWorker) Wait() error {
 
 	// Select a partition and location
 	ctxLog.Infof("Reading %d random offsets", w.config.readCount)
-	
+
 	i := 0
 	for i < readCount {
 		w.Status.Validator.ResetMonotonicityTestState()
@@ -146,7 +150,7 @@ func (w *RandomReadWorker) Wait() error {
 			if r.Partition != p {
 				util.Die("Wrong partition %d in read at offset %d on partition %s/%d", r.Partition, r.Offset, w.config.workerCfg.Topic, p)
 			}
-			w.Status.Validator.ValidateRecord(r, &validRanges)
+			w.Status.Validator.ValidateRecord(r, &validRanges, &latestValuesProduced)
 		})
 		if len(fetches.Records()) == 0 {
 			ctxLog.Errorf("Reloading offsets on empty response reading from partition %d at %s", p, offset)

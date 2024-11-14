@@ -70,6 +70,8 @@ type ProducerWorker struct {
 
 	tolerateDataLoss      bool
 	tolerateFailedProduce bool
+
+	validateLatestValues bool
 }
 
 func NewProducerWorker(cfg ProducerConfig) ProducerWorker {
@@ -89,6 +91,7 @@ func NewProducerWorker(cfg ProducerConfig) ProducerWorker {
 		churnProducers:        cfg.messagesPerProducerId > 0,
 		tolerateDataLoss:      cfg.workerCfg.TolerateDataLoss,
 		tolerateFailedProduce: cfg.workerCfg.TolerateFailedProduce,
+		validateLatestValues:  cfg.workerCfg.ValidateLatestValues,
 	}
 }
 
@@ -229,8 +232,10 @@ func (pw *ProducerWorker) Store() {
 	err := pw.validOffsets.Store()
 	util.Chk(err, "Error writing offset map: %v", err)
 
-	err = pw.latestValueProduced.Store()
-	util.Chk(err, "Error writing latest value map: %v", err)
+	if pw.validateLatestValues {
+		err = pw.latestValueProduced.Store()
+		util.Chk(err, "Error writing latest value map: %v", err)
+	}
 }
 
 func (pw *ProducerWorker) produceCheckpoint() {
@@ -393,7 +398,9 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 				pw.Status.latency.Update(ackLatency.Microseconds())
 				log.Debugf("Wrote partition %d at %d", r.Partition, r.Offset)
 				pw.validOffsets.Insert(r.Partition, r.Offset)
-				pw.latestValueProduced.Insert(r.Partition, string(r.Key), string(r.Value))
+				if pw.validateLatestValues {
+					pw.latestValueProduced.Insert(r.Partition, string(r.Key), string(r.Value))
+				}
 
 			}
 			wg.Done()

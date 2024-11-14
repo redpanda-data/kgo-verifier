@@ -73,7 +73,8 @@ var (
 	tolerateDataLoss      = flag.Bool("tolerate-data-loss", false, "If true, tolerate data-loss events")
 	tolerateFailedProduce = flag.Bool("tolerate-failed-produce", false, "If true, tolerate and retry failed produce")
 	tombstoneProbability  = flag.Float64("tombstone-probability", 0.0, "The probability (between 0.0 and 1.0) that a record produced is a tombstone record.")
-	compacted             = flag.Bool("compacted", false, "Whether the topic to be verified is compacted or not.")
+	compacted             = flag.Bool("compacted", false, "Whether the topic to be verified is compacted or not. This will suppress warnings about offset gaps in consumed values.")
+	validateLatestValues  = flag.Bool("validate-latest-values", false, "If true, values consumed by a worker will be validated against the last produced value by a producer. This value should only be set if compaction has been allowed to fully de-duplicate the entirety of the log before consuming.")
 )
 
 func makeWorkerConfig() worker.WorkerConfig {
@@ -94,6 +95,7 @@ func makeWorkerConfig() worker.WorkerConfig {
 		TolerateDataLoss:      *tolerateDataLoss,
 		TolerateFailedProduce: *tolerateFailedProduce,
 		Continuous:            *continuous,
+		ValidateLatestValues:  *validateLatestValues,
 	}
 
 	return c
@@ -263,7 +265,7 @@ func main() {
 		srw := verifier.NewSeqReadWorker(verifier.NewSeqReadConfig(
 			makeWorkerConfig(), "sequential", nPartitions, *seqConsumeCount,
 			(*consumeTputMb)*1024*1024,
-		), verifier.NewValidatorStatus(*compacted))
+		), verifier.NewValidatorStatus(*compacted, *validateLatestValues, *topic, nPartitions))
 		workers = append(workers, &srw)
 
 		for loopState.Next() {
@@ -282,7 +284,7 @@ func main() {
 			workerCfg := verifier.NewRandomReadConfig(
 				makeWorkerConfig(), fmt.Sprintf("random-%03d", i), nPartitions, *cCount,
 			)
-			worker := verifier.NewRandomReadWorker(workerCfg, verifier.NewValidatorStatus(*compacted))
+			worker := verifier.NewRandomReadWorker(workerCfg, verifier.NewValidatorStatus(*compacted, *validateLatestValues, *topic, nPartitions))
 			randomWorkers = append(randomWorkers, &worker)
 			workers = append(workers, &worker)
 		}
@@ -311,7 +313,7 @@ func main() {
 		grw := verifier.NewGroupReadWorker(
 			verifier.NewGroupReadConfig(
 				makeWorkerConfig(), *cgName, nPartitions, *cgReaders,
-				*seqConsumeCount, (*consumeTputMb)*1024*1024), verifier.NewValidatorStatus(*compacted))
+				*seqConsumeCount, (*consumeTputMb)*1024*1024), verifier.NewValidatorStatus(*compacted, *validateLatestValues, *topic, nPartitions))
 		workers = append(workers, &grw)
 
 		for loopState.Next() {
