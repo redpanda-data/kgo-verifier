@@ -110,6 +110,9 @@ func (pw *ProducerWorker) newRecord(producerId int, sequence int64) *kgo.Record 
 	}
 
 	payload := pw.config.valueGenerator.Generate()
+	if payload == nil {
+		pw.Status.TombstonesProduced += 1
+	}
 	var r *kgo.Record
 
 	if pw.config.keySetCardinality < 0 {
@@ -153,6 +156,9 @@ type ProducerWorkerStatus struct {
 
 	// How many times produce request failed?
 	Fails int64 `json:"fails"`
+
+	// How many tombstone records were produced?
+	TombstonesProduced int64 `json:"tombstones_produced"`
 
 	// How many failures occured while trying to begin, abort,
 	// or commit a transaction.

@@ -41,6 +41,9 @@ type ValidatorStatus struct {
 
 	LostOffsets map[int32]int64 `json:"lost_offsets"`
 
+	// The number of tombstones consumed
+	TombstonesConsumed int64 `json:"tombstones_consumed"`
+
 	// Concurrent access happens when doing random reads
 	// with multiple reader fibers
 	lock sync.Mutex
@@ -66,6 +69,10 @@ func (cs *ValidatorStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffse
 	log.Debugf("Consumed %s on p=%d at o=%d leaderEpoch=%d", r.Key, r.Partition, r.Offset, r.LeaderEpoch)
 	cs.lock.Lock()
 	defer cs.lock.Unlock()
+
+	if r.Value == nil {
+		cs.TombstonesConsumed += 1
+	}
 
 	if r.LeaderEpoch < cs.lastLeaderEpoch[r.Partition] {
 		log.Panicf("Out of order leader epoch on p=%d at o=%d leaderEpoch=%d. Previous leaderEpoch=%d",
