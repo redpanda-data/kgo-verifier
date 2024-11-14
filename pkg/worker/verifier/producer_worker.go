@@ -34,7 +34,7 @@ type ProducerConfig struct {
 }
 
 func NewProducerConfig(wc worker.WorkerConfig, name string, nPartitions int32,
-	messageSize int, messageCount int, fakeTimestampMs int64, fakeTimestampStepMs int64, rateLimitBytes int, keySetCardinality int, messagesPerProducerId int) ProducerConfig {
+	messageSize int, messageCount int, fakeTimestampMs int64, fakeTimestampStepMs int64, rateLimitBytes int, keySetCardinality int, messagesPerProducerId int, tombstoneProbability float64) ProducerConfig {
 	return ProducerConfig{
 		workerCfg:             wc,
 		name:                  name,
@@ -47,8 +47,9 @@ func NewProducerConfig(wc worker.WorkerConfig, name string, nPartitions int32,
 		keySetCardinality:     keySetCardinality,
 		messagesPerProducerId: messagesPerProducerId,
 		valueGenerator: worker.ValueGenerator{
-			PayloadSize:  uint64(messageSize),
-			Compressible: wc.CompressiblePayload,
+			PayloadSize:          uint64(messageSize),
+			Compressible:         wc.CompressiblePayload,
+			TombstoneProbability: tombstoneProbability,
 		},
 	}
 }
@@ -108,7 +109,7 @@ func (pw *ProducerWorker) newRecord(producerId int, sequence int64) *kgo.Record 
 		pw.Status.AbortedTransactionMessages += 1
 	}
 
-	payload := make([]byte, pw.config.messageSize)
+	payload := pw.config.valueGenerator.Generate()
 	var r *kgo.Record
 
 	if pw.config.keySetCardinality < 0 {

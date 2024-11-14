@@ -72,6 +72,7 @@ var (
 
 	tolerateDataLoss      = flag.Bool("tolerate-data-loss", false, "If true, tolerate data-loss events")
 	tolerateFailedProduce = flag.Bool("tolerate-failed-produce", false, "If true, tolerate and retry failed produce")
+	tombstoneProbability  = flag.Float64("tombstone-probability", 0.0, "The probability (between 0.0 and 1.0) that a record produced is a tombstone record.")
 )
 
 func makeWorkerConfig() worker.WorkerConfig {
@@ -245,7 +246,7 @@ func main() {
 
 	if *pCount > 0 {
 		log.Info("Starting producer...")
-		pwc := verifier.NewProducerConfig(makeWorkerConfig(), "producer", nPartitions, *mSize, *pCount, *fakeTimestampMs, *fakeTimestampStepMs, (*produceRateLimitBps), *keySetCardinality, *msgsPerProducerId)
+		pwc := verifier.NewProducerConfig(makeWorkerConfig(), "producer", nPartitions, *mSize, *pCount, *fakeTimestampMs, *fakeTimestampStepMs, (*produceRateLimitBps), *keySetCardinality, *msgsPerProducerId, *tombstoneProbability)
 		pw := verifier.NewProducerWorker(pwc)
 
 		if *useTransactions {

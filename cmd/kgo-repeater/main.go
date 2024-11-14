@@ -50,8 +50,9 @@ var (
 	transactionAbortRate = flag.Float64("transaction-abort-rate", 0.0, "The probability that any given transaction should abort")
 	msgsPerTransaction   = flag.Uint("msgs-per-transaction", 1, "The number of messages that should be in a given transaction")
 
-	compressionType     = flag.String("compression-type", "", "One of gzip, snappy, lz4, zstd, or 'mixed' to pick a random codec for each producer")
-	compressiblePayload = flag.Bool("compressible-payload", false, "If true, use a highly compressible payload instead of the default random payload")
+	compressionType      = flag.String("compression-type", "", "One of gzip, snappy, lz4, zstd, or 'mixed' to pick a random codec for each producer")
+	compressiblePayload  = flag.Bool("compressible-payload", false, "If true, use a highly compressible payload instead of the default random payload")
+	tombstoneProbability = flag.Float64("tombstone-probability", 0.0, "The probability (between 0.0 and 1.0) that a record produced is a tombstone record.")
 )
 
 // NewAdmin returns a franz-go admin client.
@@ -150,7 +151,7 @@ func main() {
 		// it was refactored.
 		wConfig := worker.NewWorkerConfig(
 			name, *brokers, *trace, topicsList[0], *linger, *maxBufferedRecords, *useTransactions, *compressionType, *compressiblePayload, *username, *password, *enableTls)
-		config := repeater.NewRepeaterConfig(wConfig, topicsList, *group, *keys, *payloadSize, dataInFlightPerWorker, rateLimitPerWorker)
+		config := repeater.NewRepeaterConfig(wConfig, topicsList, *group, *keys, *payloadSize, dataInFlightPerWorker, rateLimitPerWorker, *tombstoneProbability)
 		lv := repeater.NewWorker(config)
 		if *useTransactions {
 			tconfig := worker.NewTransactionSTMConfig(*transactionAbortRate, *msgsPerTransaction)
@@ -212,9 +213,9 @@ func main() {
 	go func() {
 		listenAddr := fmt.Sprintf("0.0.0.0:%d", *remotePort)
 		if err := http.ListenAndServe(listenAddr, mux); err != nil {
-			panic(fmt.Sprintf("failed to listen on %s: %v", listenAddr, err));
+			panic(fmt.Sprintf("failed to listen on %s: %v", listenAddr, err))
 		}
-	}();
+	}()
 
 	if !*remote {
 		admin, err := NewAdmin()

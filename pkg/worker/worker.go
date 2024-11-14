@@ -100,13 +100,18 @@ type KeySpace struct {
 }
 
 type ValueGenerator struct {
-	PayloadSize  uint64
-	Compressible bool
+	PayloadSize          uint64
+	Compressible         bool
+	TombstoneProbability float64
 }
 
 var compressible_payload []byte
 
 func (vg *ValueGenerator) Generate() []byte {
+	isTombstone := rand.Float64() < vg.TombstoneProbability
+	if isTombstone {
+		return nil
+	}
 	if vg.Compressible {
 		// Zeros, which is about as compressible as an array can be.
 		if len(compressible_payload) == 0 {
