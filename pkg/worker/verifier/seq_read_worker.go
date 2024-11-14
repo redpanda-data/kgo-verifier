@@ -43,10 +43,10 @@ type SeqReadWorker struct {
 	Status SeqWorkerStatus
 }
 
-func NewSeqReadWorker(cfg SeqReadConfig) SeqReadWorker {
+func NewSeqReadWorker(cfg SeqReadConfig, validatorStatus ValidatorStatus) SeqReadWorker {
 	return SeqReadWorker{
 		config: cfg,
-		Status: SeqWorkerStatus{Topic: cfg.workerCfg.Topic},
+		Status: SeqWorkerStatus{Topic: cfg.workerCfg.Topic, Validator: validatorStatus},
 	}
 }
 

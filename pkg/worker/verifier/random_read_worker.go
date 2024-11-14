@@ -42,10 +42,10 @@ func NewRandomReadConfig(wc worker.WorkerConfig, name string, nPartitions int32,
 	}
 }
 
-func NewRandomReadWorker(cfg RandomReadConfig) RandomReadWorker {
+func NewRandomReadWorker(cfg RandomReadConfig, validatorStatus ValidatorStatus) RandomReadWorker {
 	return RandomReadWorker{
 		config: cfg,
-		Status: RandomWorkerStatus{Topic: cfg.workerCfg.Topic},
+		Status: RandomWorkerStatus{Topic: cfg.workerCfg.Topic, Validator: validatorStatus},
 	}
 }
 

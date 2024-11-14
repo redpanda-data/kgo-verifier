@@ -11,10 +11,12 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-func NewValidatorStatus() ValidatorStatus {
+func NewValidatorStatus(compacted bool) ValidatorStatus {
 	return ValidatorStatus{
 		MaxOffsetsConsumed: make(map[int32]int64),
-		lastCheckpoint:     time.Now(),
+
+		lastCheckpoint: time.Now(),
+		compacted:      compacted,
 	}
 }
 
@@ -49,8 +51,14 @@ type ValidatorStatus struct {
 	// Last consumed offset per partition. Used to assert monotonicity and check for gaps.
 	lastOffsetConsumed map[int32]int64
 
+	// The latest offset seen for a given key. Used to help track the latest key-value pair that should be seen.
+	lastOffsetPerKeyConsumed map[string]int64
+
 	// Last leader epoch per partition. Used to assert monotonicity.
 	lastLeaderEpoch map[int32]int32
+
+	// Whether the topic to be consumed is compacted. Gaps in offsets will be ignored if true.
+	compacted bool
 }
 
 func (cs *ValidatorStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffsetRanges) {
@@ -68,7 +76,7 @@ func (cs *ValidatorStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffse
 	if present {
 		if currentMax < r.Offset {
 			expected := currentMax + 1
-			if r.Offset != expected {
+			if r.Offset != expected && !cs.compacted {
 				log.Warnf("Gap detected in consumed offsets. Expected %d, but got %d", expected, r.Offset)
 			}
 		} else {

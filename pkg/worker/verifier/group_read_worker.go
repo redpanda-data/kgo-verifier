@@ -49,10 +49,10 @@ type GroupReadWorker struct {
 	Status GroupWorkerStatus
 }
 
-func NewGroupReadWorker(cfg GroupReadConfig) GroupReadWorker {
+func NewGroupReadWorker(cfg GroupReadConfig, validatorStatus ValidatorStatus) GroupReadWorker {
 	return GroupReadWorker{
 		config: cfg,
-		Status: GroupWorkerStatus{Topic: cfg.workerCfg.Topic},
+		Status: GroupWorkerStatus{Topic: cfg.workerCfg.Topic, Validator: validatorStatus},
 	}
 }
 
