@@ -55,9 +55,10 @@ func NewProducerConfig(wc worker.WorkerConfig, name string, nPartitions int32,
 }
 
 type ProducerWorker struct {
-	config       ProducerConfig
-	Status       ProducerWorkerStatus
-	validOffsets TopicOffsetRanges
+	config              ProducerConfig
+	Status              ProducerWorkerStatus
+	validOffsets        TopicOffsetRanges
+	latestValueProduced LatestValueMap
 
 	payload []byte
 
@@ -82,6 +83,7 @@ func NewProducerWorker(cfg ProducerConfig) ProducerWorker {
 	return ProducerWorker{
 		config:                cfg,
 		Status:                NewProducerWorkerStatus(cfg.workerCfg.Topic),
+		latestValueProduced:   NewLatestValueMap(cfg.workerCfg.Topic, cfg.nPartitions),
 		validOffsets:          validOffsets,
 		payload:               cfg.valueGenerator.Generate(),
 		churnProducers:        cfg.messagesPerProducerId > 0,
@@ -223,14 +225,20 @@ func (self *ProducerWorkerStatus) OnFail() {
 	self.Fails += 1
 }
 
-func (pw *ProducerWorker) produceCheckpoint() {
+func (pw *ProducerWorker) Store() {
 	err := pw.validOffsets.Store()
 	util.Chk(err, "Error writing offset map: %v", err)
 
+	err = pw.latestValueProduced.Store()
+	util.Chk(err, "Error writing latest value map: %v", err)
+}
+
+func (pw *ProducerWorker) produceCheckpoint() {
 	status, lock := pw.GetStatus()
 
 	lock.Lock()
 	data, err := json.Marshal(status)
+	pw.Store()
 	lock.Unlock()
 
 	util.Chk(err, "Status serialization error")
@@ -385,6 +393,8 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 				pw.Status.latency.Update(ackLatency.Microseconds())
 				log.Debugf("Wrote partition %d at %d", r.Partition, r.Offset)
 				pw.validOffsets.Insert(r.Partition, r.Offset)
+				pw.latestValueProduced.Insert(r.Partition, string(r.Key), string(r.Value))
+
 			}
 			wg.Done()
 		}
