@@ -31,6 +31,7 @@ type ProducerConfig struct {
 	keySetCardinality     int
 	messagesPerProducerId int
 	valueGenerator        worker.ValueGenerator
+	producesTombstones    bool
 }
 
 func NewProducerConfig(wc worker.WorkerConfig, name string, nPartitions int32,
@@ -46,6 +47,7 @@ func NewProducerConfig(wc worker.WorkerConfig, name string, nPartitions int32,
 		rateLimitBytes:        rateLimitBytes,
 		keySetCardinality:     keySetCardinality,
 		messagesPerProducerId: messagesPerProducerId,
+		producesTombstones:    tombstoneProbability != 0,
 		valueGenerator: worker.ValueGenerator{
 			PayloadSize:          uint64(messageSize),
 			Compressible:         wc.CompressiblePayload,
@@ -80,6 +82,11 @@ func NewProducerWorker(cfg ProducerConfig) ProducerWorker {
 		for ix := range validOffsets.PartitionRanges {
 			validOffsets.PartitionRanges[ix].TolerateDataLoss = true
 		}
+	}
+
+	// If we produce tombstones, we may need to adjust the offsets we attempt to consume up to in the sequential read worker (for tombstone records that represent the HWM and have been removed due to retention)
+	if cfg.producesTombstones {
+		validOffsets.AdjustConsumableOffsets = true
 	}
 
 	return ProducerWorker{
@@ -398,6 +405,9 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 				pw.Status.latency.Update(ackLatency.Microseconds())
 				log.Debugf("Wrote partition %d at %d", r.Partition, r.Offset)
 				pw.validOffsets.Insert(r.Partition, r.Offset)
+				if pw.config.producesTombstones && r.Value != nil {
+					pw.validOffsets.SetLastConsumableOffset(r.Partition, r.Offset)
+				}
 				if pw.validateLatestValues {
 					pw.latestValueProduced.Insert(r.Partition, string(r.Key), string(r.Value))
 				}
