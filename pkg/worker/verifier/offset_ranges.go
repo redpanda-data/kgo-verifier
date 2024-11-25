@@ -31,6 +31,14 @@ func LoadTopicOffsetRanges(topic string, nPartitions int32) TopicOffsetRanges {
 			tors.PartitionRanges = append(tors.PartitionRanges, blanks...)
 		}
 
+		if int32(len(tors.LastConsumableOffsets)) > nPartitions {
+			util.Die("More partitions in valid_offsets file than in topic!")
+		} else if len(tors.LastConsumableOffsets) < int(nPartitions) {
+			// Creating new partitions is allowed
+			blanks := make([]int64, nPartitions-int32(len(tors.LastConsumableOffsets)))
+			tors.LastConsumableOffsets = append(tors.LastConsumableOffsets, blanks...)
+		}
+
 		return tors
 	}
 }
@@ -105,6 +113,15 @@ func (ors *OffsetRanges) Contains(o int64) bool {
 type TopicOffsetRanges struct {
 	topic           string
 	PartitionRanges []OffsetRanges
+
+	// In the case that the topic being consumed from had tombstones produced,
+	// the high watermark may be given by a tombstone record that has been removed.
+	// In trying to consume until this point, readers will become stuck polling for
+	// new records.
+	AdjustConsumableOffsets bool
+	// Persist the last consumable offset here to adjust the offset we attempt to read
+	// up to in the read workers.
+	LastConsumableOffsets []int64
 }
 
 func (tors *TopicOffsetRanges) Insert(p int32, o int64) {
@@ -113,6 +130,10 @@ func (tors *TopicOffsetRanges) Insert(p int32, o int64) {
 
 func (tors *TopicOffsetRanges) Contains(p int32, o int64) bool {
 	return tors.PartitionRanges[p].Contains(o)
+}
+
+func (tors *TopicOffsetRanges) SetLastConsumableOffset(p int32, o int64) {
+	tors.LastConsumableOffsets[p] = o
 }
 
 func topicOffsetRangeFile(topic string) string {
@@ -153,8 +174,12 @@ func NewTopicOffsetRanges(topic string, nPartitions int32) TopicOffsetRanges {
 	for _, or := range prs {
 		or.Ranges = make([]OffsetRange, 0)
 	}
+	lcos := make([]int64, nPartitions)
+
 	return TopicOffsetRanges{
-		topic:           topic,
-		PartitionRanges: prs,
+		topic:                   topic,
+		PartitionRanges:         prs,
+		AdjustConsumableOffsets: false,
+		LastConsumableOffsets:   lcos,
 	}
 }

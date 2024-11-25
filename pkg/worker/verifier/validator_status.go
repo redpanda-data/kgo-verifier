@@ -11,10 +11,12 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-func NewValidatorStatus() ValidatorStatus {
+func NewValidatorStatus(compacted bool, expectFullyCompacted bool, topic string, nPartitions int32) ValidatorStatus {
 	return ValidatorStatus{
-		MaxOffsetsConsumed: make(map[int32]int64),
-		lastCheckpoint:     time.Now(),
+		MaxOffsetsConsumed:   make(map[int32]int64),
+		lastCheckpoint:       time.Now(),
+		compacted:            compacted,
+		expectFullyCompacted: expectFullyCompacted,
 	}
 }
 
@@ -39,6 +41,9 @@ type ValidatorStatus struct {
 
 	LostOffsets map[int32]int64 `json:"lost_offsets"`
 
+	// The number of tombstones consumed
+	TombstonesConsumed int64 `json:"tombstones_consumed"`
+
 	// Concurrent access happens when doing random reads
 	// with multiple reader fibers
 	lock sync.Mutex
@@ -51,13 +56,23 @@ type ValidatorStatus struct {
 
 	// Last leader epoch per partition. Used to assert monotonicity.
 	lastLeaderEpoch map[int32]int32
+
+	// Whether the topic to be consumed is compacted. Gaps in offsets will be ignored if true.
+	compacted bool
+
+	// Whether the values consumed should be verified against the last produced value for a given key in the log.
+	expectFullyCompacted bool
 }
 
-func (cs *ValidatorStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffsetRanges) {
+func (cs *ValidatorStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffsetRanges, latestValuesProduced *LatestValueMap) {
 	expect_header_value := fmt.Sprintf("%06d.%018d", 0, r.Offset)
 	log.Debugf("Consumed %s on p=%d at o=%d leaderEpoch=%d", r.Key, r.Partition, r.Offset, r.LeaderEpoch)
 	cs.lock.Lock()
 	defer cs.lock.Unlock()
+
+	if r.Value == nil {
+		cs.TombstonesConsumed += 1
+	}
 
 	if r.LeaderEpoch < cs.lastLeaderEpoch[r.Partition] {
 		log.Panicf("Out of order leader epoch on p=%d at o=%d leaderEpoch=%d. Previous leaderEpoch=%d",
@@ -68,7 +83,7 @@ func (cs *ValidatorStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffse
 	if present {
 		if currentMax < r.Offset {
 			expected := currentMax + 1
-			if r.Offset != expected {
+			if r.Offset != expected && !cs.compacted {
 				log.Warnf("Gap detected in consumed offsets. Expected %d, but got %d", expected, r.Offset)
 			}
 		} else {
@@ -97,6 +112,13 @@ func (cs *ValidatorStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffse
 		log.Debugf("Read OK (%s) on p=%d at o=%d", r.Headers[0].Value, r.Partition, r.Offset)
 	}
 
+	if cs.expectFullyCompacted {
+		latestValue, exists := latestValuesProduced.Get(r.Partition, string(r.Key))
+		if !exists || latestValue != string(r.Value) {
+			log.Panicf("Consumed value for key %s does not match the latest produced value in a compacted topic- did compaction for partition %s/%d occur betwen producing and consuming?", r.Key, r.Topic, r.Partition)
+		}
+	}
+
 	cs.recordOffset(r, recordExpected)
 
 	if time.Since(cs.lastCheckpoint) > time.Second*5 {
@@ -115,7 +137,6 @@ func (cs *ValidatorStatus) recordOffset(r *kgo.Record, recordExpected bool) {
 	if cs.lastLeaderEpoch == nil {
 		cs.lastLeaderEpoch = make(map[int32]int32)
 	}
-
 	// We bump highest offset only for valid records.
 	if r.Offset > cs.MaxOffsetsConsumed[r.Partition] && recordExpected {
 		cs.MaxOffsetsConsumed[r.Partition] = r.Offset

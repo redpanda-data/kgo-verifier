@@ -31,10 +31,11 @@ type ProducerConfig struct {
 	keySetCardinality     int
 	messagesPerProducerId int
 	valueGenerator        worker.ValueGenerator
+	producesTombstones    bool
 }
 
 func NewProducerConfig(wc worker.WorkerConfig, name string, nPartitions int32,
-	messageSize int, messageCount int, fakeTimestampMs int64, fakeTimestampStepMs int64, rateLimitBytes int, keySetCardinality int, messagesPerProducerId int) ProducerConfig {
+	messageSize int, messageCount int, fakeTimestampMs int64, fakeTimestampStepMs int64, rateLimitBytes int, keySetCardinality int, messagesPerProducerId int, tombstoneProbability float64) ProducerConfig {
 	return ProducerConfig{
 		workerCfg:             wc,
 		name:                  name,
@@ -46,17 +47,20 @@ func NewProducerConfig(wc worker.WorkerConfig, name string, nPartitions int32,
 		rateLimitBytes:        rateLimitBytes,
 		keySetCardinality:     keySetCardinality,
 		messagesPerProducerId: messagesPerProducerId,
+		producesTombstones:    tombstoneProbability != 0,
 		valueGenerator: worker.ValueGenerator{
-			PayloadSize:  uint64(messageSize),
-			Compressible: wc.CompressiblePayload,
+			PayloadSize:          uint64(messageSize),
+			Compressible:         wc.CompressiblePayload,
+			TombstoneProbability: tombstoneProbability,
 		},
 	}
 }
 
 type ProducerWorker struct {
-	config       ProducerConfig
-	Status       ProducerWorkerStatus
-	validOffsets TopicOffsetRanges
+	config              ProducerConfig
+	Status              ProducerWorkerStatus
+	validOffsets        TopicOffsetRanges
+	latestValueProduced LatestValueMap
 
 	payload []byte
 
@@ -68,6 +72,8 @@ type ProducerWorker struct {
 
 	tolerateDataLoss      bool
 	tolerateFailedProduce bool
+
+	validateLatestValues bool
 }
 
 func NewProducerWorker(cfg ProducerConfig) ProducerWorker {
@@ -78,14 +84,21 @@ func NewProducerWorker(cfg ProducerConfig) ProducerWorker {
 		}
 	}
 
+	// If we produce tombstones, we may need to adjust the offsets we attempt to consume up to in the sequential read worker (for tombstone records that represent the HWM and have been removed due to retention)
+	if cfg.producesTombstones {
+		validOffsets.AdjustConsumableOffsets = true
+	}
+
 	return ProducerWorker{
 		config:                cfg,
 		Status:                NewProducerWorkerStatus(cfg.workerCfg.Topic),
+		latestValueProduced:   NewLatestValueMap(cfg.workerCfg.Topic, cfg.nPartitions),
 		validOffsets:          validOffsets,
 		payload:               cfg.valueGenerator.Generate(),
 		churnProducers:        cfg.messagesPerProducerId > 0,
 		tolerateDataLoss:      cfg.workerCfg.TolerateDataLoss,
 		tolerateFailedProduce: cfg.workerCfg.TolerateFailedProduce,
+		validateLatestValues:  cfg.workerCfg.ValidateLatestValues,
 	}
 }
 
@@ -108,7 +121,10 @@ func (pw *ProducerWorker) newRecord(producerId int, sequence int64) *kgo.Record 
 		pw.Status.AbortedTransactionMessages += 1
 	}
 
-	payload := make([]byte, pw.config.messageSize)
+	payload := pw.config.valueGenerator.Generate()
+	if payload == nil {
+		pw.Status.TombstonesProduced += 1
+	}
 	var r *kgo.Record
 
 	if pw.config.keySetCardinality < 0 {
@@ -153,6 +169,9 @@ type ProducerWorkerStatus struct {
 	// How many times produce request failed?
 	Fails int64 `json:"fails"`
 
+	// How many tombstone records were produced?
+	TombstonesProduced int64 `json:"tombstones_produced"`
+
 	// How many failures occured while trying to begin, abort,
 	// or commit a transaction.
 	FailedTransactions int64 `json:"failed_transactions"`
@@ -184,9 +203,22 @@ func NewProducerWorkerStatus(topic string) ProducerWorkerStatus {
 	}
 }
 
+func (pw *ProducerWorker) OnAcked(r *kgo.Record) {
+	pw.Status.lock.Lock()
+	defer pw.Status.lock.Unlock()
+
+	pw.Status.OnAcked(r.Partition, r.Offset)
+
+	pw.validOffsets.Insert(r.Partition, r.Offset)
+	if pw.config.producesTombstones && r.Value != nil {
+		pw.validOffsets.SetLastConsumableOffset(r.Partition, r.Offset)
+	}
+	if pw.validateLatestValues {
+		pw.latestValueProduced.Insert(r.Partition, string(r.Key), string(r.Value))
+	}
+}
+
 func (self *ProducerWorkerStatus) OnAcked(Partition int32, Offset int64) {
-	self.lock.Lock()
-	defer self.lock.Unlock()
 	self.Acked += 1
 
 	currentMax, present := self.MaxOffsetsProduced[Partition]
@@ -216,14 +248,22 @@ func (self *ProducerWorkerStatus) OnFail() {
 	self.Fails += 1
 }
 
-func (pw *ProducerWorker) produceCheckpoint() {
+func (pw *ProducerWorker) Store() {
 	err := pw.validOffsets.Store()
 	util.Chk(err, "Error writing offset map: %v", err)
 
+	if pw.validateLatestValues {
+		err = pw.latestValueProduced.Store()
+		util.Chk(err, "Error writing latest value map: %v", err)
+	}
+}
+
+func (pw *ProducerWorker) produceCheckpoint() {
 	status, lock := pw.GetStatus()
 
 	lock.Lock()
 	data, err := json.Marshal(status)
+	pw.Store()
 	lock.Unlock()
 
 	util.Chk(err, "Status serialization error")
@@ -374,10 +414,9 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 				log.Debugf("errored = %t", errored)
 			} else {
 				ackLatency := time.Now().Sub(sentAt)
-				pw.Status.OnAcked(r.Partition, r.Offset)
+				pw.OnAcked(r)
 				pw.Status.latency.Update(ackLatency.Microseconds())
 				log.Debugf("Wrote partition %d at %d", r.Partition, r.Offset)
-				pw.validOffsets.Insert(r.Partition, r.Offset)
 			}
 			wg.Done()
 		}

@@ -100,13 +100,18 @@ type KeySpace struct {
 }
 
 type ValueGenerator struct {
-	PayloadSize  uint64
-	Compressible bool
+	PayloadSize          uint64
+	Compressible         bool
+	TombstoneProbability float64
 }
 
 var compressible_payload []byte
 
 func (vg *ValueGenerator) Generate() []byte {
+	isTombstone := rand.Float64() < vg.TombstoneProbability
+	if isTombstone {
+		return nil
+	}
 	if vg.Compressible {
 		// Zeros, which is about as compressible as an array can be.
 		if len(compressible_payload) == 0 {
@@ -123,14 +128,25 @@ func (vg *ValueGenerator) Generate() []byte {
 		// huge message sizes (e.g. 128MIB of zeros compresses down to <1MiB.
 		return compressible_payload
 	} else {
-		payload := make([]byte, vg.PayloadSize)
-		// An incompressible high entropy payload
-		n, err := rand.Read(payload)
+		randBytes := make([]byte, vg.PayloadSize)
+		// An incompressible high entropy payload. This will likely not be UTF-8 decodable.
+		n, err := rand.Read(randBytes)
 		if err != nil {
 			panic(err.Error())
 		}
 		if n != int(vg.PayloadSize) {
 			panic("Unexpected byte count from rand.Read")
+		}
+		// Convert to a valid UTF-8 string, replacing bad chars with " ".
+		// A valid UTF-8 string is needed to avoid any decoding issues
+		// for services on the consuming end.
+		payload := []byte(strings.ToValidUTF8(string(randBytes), " "))
+
+		// In converting to valid UTF-8, we may have lost some bytes.
+		// Append back the difference.
+		diff := int(vg.PayloadSize) - len(payload)
+		if diff > 0 {
+			payload = append(payload, make([]byte, diff)...)
 		}
 		return payload
 	}
@@ -160,6 +176,7 @@ type WorkerConfig struct {
 	TolerateDataLoss      bool
 	TolerateFailedProduce bool
 	Continuous            bool
+	ValidateLatestValues  bool
 }
 
 func CompressionCodecFromString(s string) (kgo.CompressionCodec, error) {

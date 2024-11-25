@@ -52,13 +52,13 @@ type RepeaterConfig struct {
 	RateLimitBps   int
 }
 
-func NewRepeaterConfig(cfg worker.WorkerConfig, topics []string, group string, keys uint64, payloadSize uint64, dataInFlight uint64, rateLimitBps int) RepeaterConfig {
+func NewRepeaterConfig(cfg worker.WorkerConfig, topics []string, group string, keys uint64, payloadSize uint64, dataInFlight uint64, rateLimitBps int, tombstoneProbability float64) RepeaterConfig {
 	return RepeaterConfig{
 		workerCfg:      cfg,
 		Topics:         topics,
 		Group:          group,
 		KeySpace:       worker.KeySpace{UniqueCount: keys},
-		ValueGenerator: worker.ValueGenerator{PayloadSize: payloadSize, Compressible: cfg.CompressiblePayload},
+		ValueGenerator: worker.ValueGenerator{PayloadSize: payloadSize, Compressible: cfg.CompressiblePayload, TombstoneProbability: tombstoneProbability},
 		DataInFlight:   dataInFlight,
 		RateLimitBps:   rateLimitBps,
 	}
