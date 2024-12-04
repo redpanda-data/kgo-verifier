@@ -11,11 +11,14 @@ import (
 )
 
 type LatestValueMap struct {
-	topic               string
-	LatestKvByPartition []map[string]string
+	topic string
+	// Latest offset for a given key
+	latestKoByPartition []map[string]int64
+	// Latest value for a given key
+	LatestKvByPartition []map[string][]byte
 }
 
-func (lvm *LatestValueMap) Get(partition int32, key string) (value string, exists bool) {
+func (lvm *LatestValueMap) GetValue(partition int32, key string) (value []byte, exists bool) {
 	if partition < 0 || partition >= int32(len(lvm.LatestKvByPartition)) {
 		log.Panicf("Partition %d out of bounds for latestValueMap of size %d", partition, len(lvm.LatestKvByPartition))
 	}
@@ -23,8 +26,12 @@ func (lvm *LatestValueMap) Get(partition int32, key string) (value string, exist
 	return
 }
 
-func (lvm *LatestValueMap) Insert(partition int32, key string, value string) {
+func (lvm *LatestValueMap) InsertKeyValue(partition int32, key string, value []byte) {
 	lvm.LatestKvByPartition[partition][key] = value
+}
+
+func (lvm *LatestValueMap) InsertKeyOffset(partition int32, key string, offset int64) {
+	lvm.latestKoByPartition[partition][key] = offset
 }
 
 func latestValueMapFile(topic string) string {
@@ -73,7 +80,7 @@ func LoadLatestValues(topic string, nPartitions int32) LatestValueMap {
 		util.Die("More partitions in latest_value_map file than in topic!")
 	} else if len(lvm.LatestKvByPartition) < int(nPartitions) {
 		// Creating new partitions is allowed
-		blanks := make([]map[string]string, nPartitions-int32(len(lvm.LatestKvByPartition)))
+		blanks := make([]map[string][]byte, nPartitions-int32(len(lvm.LatestKvByPartition)))
 		lvm.LatestKvByPartition = append(lvm.LatestKvByPartition, blanks...)
 	}
 	log.Infof("Successfully read latest value map")
@@ -81,12 +88,17 @@ func LoadLatestValues(topic string, nPartitions int32) LatestValueMap {
 }
 
 func NewLatestValueMap(topic string, nPartitions int32) LatestValueMap {
-	maps := make([]map[string]string, nPartitions)
-	for i := range maps {
-		maps[i] = make(map[string]string)
+	kvMaps := make([]map[string][]byte, nPartitions)
+	for i := range kvMaps {
+		kvMaps[i] = make(map[string][]byte)
+	}
+	koMaps := make([]map[string]int64, nPartitions)
+	for i := range koMaps {
+		koMaps[i] = make(map[string]int64)
 	}
 	return LatestValueMap{
 		topic:               topic,
-		LatestKvByPartition: maps,
+		LatestKvByPartition: kvMaps,
+		latestKoByPartition: koMaps,
 	}
 }

@@ -113,8 +113,8 @@ func (cs *ValidatorStatus) ValidateRecord(r *kgo.Record, validRanges *TopicOffse
 	}
 
 	if cs.expectFullyCompacted {
-		latestValue, exists := latestValuesProduced.Get(r.Partition, string(r.Key))
-		if !exists || latestValue != string(r.Value) {
+		latestValue, exists := latestValuesProduced.GetValue(r.Partition, string(r.Key))
+		if !exists || string(latestValue) != string(r.Value) {
 			log.Panicf("Consumed value for key %s does not match the latest produced value in a compacted topic- did compaction for partition %s/%d occur betwen producing and consuming?", r.Key, r.Topic, r.Partition)
 		}
 	}
