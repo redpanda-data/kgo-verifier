@@ -210,11 +210,9 @@ func (pw *ProducerWorker) OnAcked(r *kgo.Record) {
 	pw.Status.OnAcked(r.Partition, r.Offset)
 
 	pw.validOffsets.Insert(r.Partition, r.Offset)
-	if pw.config.producesTombstones && r.Value != nil {
-		pw.validOffsets.SetLastConsumableOffset(r.Partition, r.Offset)
-	}
-	if pw.validateLatestValues {
-		pw.latestValueProduced.Insert(r.Partition, string(r.Key), string(r.Value))
+	if pw.validateLatestValues || pw.config.producesTombstones {
+		pw.latestValueProduced.InsertKeyValue(r.Partition, string(r.Key), r.Value)
+		pw.latestValueProduced.InsertKeyOffset(r.Partition, string(r.Key), r.Offset)
 	}
 }
 
@@ -246,6 +244,19 @@ func (self *ProducerWorkerStatus) OnFail() {
 	self.lock.Lock()
 	defer self.lock.Unlock()
 	self.Fails += 1
+}
+
+func (pw *ProducerWorker) parseLastConsumableOffsets() {
+	for partition, keyOffset := range pw.latestValueProduced.latestKoByPartition {
+		for key, offset := range keyOffset {
+			value, exists := pw.latestValueProduced.GetValue(int32(partition), key)
+			if exists && value != nil {
+				if offset > pw.validOffsets.GetLastConsumableOffset(int32(partition)) {
+					pw.validOffsets.SetLastConsumableOffset(int32(partition), offset)
+				}
+			}
+		}
+	}
 }
 
 func (pw *ProducerWorker) Store() {
@@ -449,6 +460,7 @@ func (pw *ProducerWorker) produceInner(n int64) (int64, []BadOffset, error) {
 	client.Close()
 	log.Info("Closed client.")
 
+	pw.parseLastConsumableOffsets()
 	pw.produceCheckpoint()
 
 	if errored {

@@ -132,6 +132,10 @@ func (tors *TopicOffsetRanges) Contains(p int32, o int64) bool {
 	return tors.PartitionRanges[p].Contains(o)
 }
 
+func (tors *TopicOffsetRanges) GetLastConsumableOffset(p int32) int64 {
+	return tors.LastConsumableOffsets[p]
+}
+
 func (tors *TopicOffsetRanges) SetLastConsumableOffset(p int32, o int64) {
 	tors.LastConsumableOffsets[p] = o
 }
