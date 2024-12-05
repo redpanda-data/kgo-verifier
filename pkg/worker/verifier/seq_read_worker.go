@@ -154,9 +154,13 @@ func (srw *SeqReadWorker) sequentialReadInner(ctx context.Context, startAt []int
 		fetches.EachError(func(t string, p int32, err error) {
 			log.Warnf("Sequential fetch %s/%d e=%v...", t, p, err)
 			var lossErr *kgo.ErrDataLoss
-			if srw.config.workerCfg.TolerateDataLoss && errors.As(err, &lossErr) {
-				srw.Status.Validator.RecordLostOffsets(lossErr.Partition, lossErr.ConsumedTo-lossErr.ResetTo)
-				srw.Status.Validator.SetMonotonicityTestStateForPartition(p, lossErr.ResetTo-1)
+			if errors.As(err, &lossErr) {
+				if srw.config.workerCfg.TolerateDataLoss {
+					srw.Status.Validator.RecordLostOffsets(lossErr.Partition, lossErr.ConsumedTo-lossErr.ResetTo)
+					srw.Status.Validator.SetMonotonicityTestStateForPartition(p, lossErr.ResetTo-1)
+				} else {
+					log.Fatalf("Unexpected data loss detected: %v", lossErr)
+				}
 			} else {
 				r_err = err
 			}
