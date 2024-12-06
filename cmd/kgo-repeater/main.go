@@ -172,6 +172,12 @@ func main() {
 			log.Infof("Waiting for worker %d complete", i)
 			log.Infof("Verifier %d result: %s", i, result.String())
 		}
+
+		for i, v := range verifiers {
+			log.Infof("Shutting down worker %d...", i)
+			(*v).Shutdown()
+			log.Infof("Worker %d shutdown complete", i)
+		}
 	}
 
 	// Even if we're not in remote mode, start the HTTP listener so
