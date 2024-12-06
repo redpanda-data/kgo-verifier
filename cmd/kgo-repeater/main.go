@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"runtime/pprof"
 	"strings"
+	"syscall"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -127,7 +128,7 @@ func main() {
 	}
 
 	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 
 	var verifiers []*repeater.Worker
 
