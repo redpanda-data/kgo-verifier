@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"runtime/pprof"
 	"strings"
+	"syscall"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -127,7 +128,7 @@ func main() {
 	}
 
 	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 
 	var verifiers []*repeater.Worker
 
@@ -170,6 +171,12 @@ func main() {
 			result := (*v).Wait()
 			log.Infof("Waiting for worker %d complete", i)
 			log.Infof("Verifier %d result: %s", i, result.String())
+		}
+
+		for i, v := range verifiers {
+			log.Infof("Shutting down worker %d...", i)
+			(*v).Shutdown()
+			log.Infof("Worker %d shutdown complete", i)
 		}
 	}
 
