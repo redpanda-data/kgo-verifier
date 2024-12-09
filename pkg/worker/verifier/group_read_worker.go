@@ -259,9 +259,13 @@ func (grw *GroupReadWorker) consumerGroupReadInner(
 				"fiber %v: Consumer group fetch %s/%d e=%v...",
 				fiberId, t, p, err)
 			var lossErr *kgo.ErrDataLoss
-			if grw.config.workerCfg.TolerateDataLoss && errors.As(err, &lossErr) {
-				grw.Status.Validator.RecordLostOffsets(lossErr.Partition, lossErr.ConsumedTo-lossErr.ResetTo)
-				grw.Status.Validator.SetMonotonicityTestStateForPartition(p, lossErr.ResetTo-1)
+			if errors.As(err, &lossErr) {
+				if grw.config.workerCfg.TolerateDataLoss {
+					grw.Status.Validator.RecordLostOffsets(lossErr.Partition, lossErr.ConsumedTo-lossErr.ResetTo)
+					grw.Status.Validator.SetMonotonicityTestStateForPartition(p, lossErr.ResetTo-1)
+				} else {
+					log.Fatalf("Unexpected data loss detected: %v", lossErr)
+				}
 			} else {
 				r_err = err
 			}
