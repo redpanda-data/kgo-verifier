@@ -121,10 +121,25 @@ func (pw *ProducerWorker) newRecord(producerId int, sequence int64) *kgo.Record 
 		pw.Status.AbortedTransactionMessages += 1
 	}
 
-	payload := pw.config.valueGenerator.Generate()
-	if payload == nil {
+	var payload []byte
+	isTombstone := rand.Float64() < pw.config.valueGenerator.TombstoneProbability
+	if isTombstone {
+		payload = nil
 		pw.Status.TombstonesProduced += 1
+	} else {
+		if pw.validateLatestValues {
+			var value bytes.Buffer
+			fmt.Fprintf(&value, "value-%018d", sequence)
+			paddingSize := pw.config.messageSize - value.Len()
+			if paddingSize > 0 {
+				value.Write(make([]byte, paddingSize))
+			}
+			payload = value.Bytes()
+		} else {
+			payload = make([]byte, pw.config.messageSize)
+		}
 	}
+
 	var r *kgo.Record
 
 	if pw.config.keySetCardinality < 0 {
