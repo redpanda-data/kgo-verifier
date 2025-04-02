@@ -103,32 +103,45 @@ type ValueGenerator struct {
 	PayloadSize          uint64
 	Compressible         bool
 	TombstoneProbability float64
+	RandomData           []byte
 }
 
 var compressible_payload []byte
 
-func (vg *ValueGenerator) GenerateRandom() []byte {
-	randBytes := make([]byte, vg.PayloadSize)
-	// An incompressible high entropy payload. This will likely not be UTF-8 decodable.
-	n, err := rand.Read(randBytes)
-	if err != nil {
-		panic(err.Error())
+func min(vars ...int) int {
+	v := vars[0]
+	for _, i := range vars {
+		if i < v {
+			v = i
+		}
 	}
-	if n != int(vg.PayloadSize) {
-		panic("Unexpected byte count from rand.Read")
-	}
-	// Convert to a valid UTF-8 string, replacing bad chars with " ".
-	// A valid UTF-8 string is needed to avoid any decoding issues
-	// for services on the consuming end.
-	payload := []byte(strings.ToValidUTF8(string(randBytes), " "))
+	return v
+}
 
-	// In converting to valid UTF-8, we may have lost some bytes.
-	// Append back the difference.
-	diff := int(vg.PayloadSize) - len(payload)
-	if diff > 0 {
-		payload = append(payload, make([]byte, diff)...)
+func (vg *ValueGenerator) GenerateRandom() []byte {
+	if vg.RandomData == nil {
+		// 2mb should be enough
+		data := make([]byte, 1<<21)
+		for i := range data {
+			// printable ascii range
+			data[i] = byte(rand.Intn(126+1-32) + 32)
+		}
+		vg.RandomData = data
 	}
-	return payload
+	frag_size := 1024 // didn't seem to have much perf impact
+	size := int(vg.PayloadSize)
+	res := make([]byte, 0, size)
+	for {
+		remaining := size - len(res)
+		if remaining == 0 {
+			break
+		}
+		start := rand.Intn(size)
+		view := vg.RandomData[start:]
+		end := min(len(view), remaining, frag_size)
+		res = append(res, view[:end]...)
+	}
+	return res
 }
 
 func (vg *ValueGenerator) GenerateCompressible() []byte {
