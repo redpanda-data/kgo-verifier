@@ -132,8 +132,10 @@ func (pw *ProducerWorker) newRecord(producerId int, sequence int64) *kgo.Record 
 				value.Write(make([]byte, paddingSize))
 			}
 			payload = value.Bytes()
+		} else if pw.config.valueGenerator.Compressible {
+			payload = pw.config.valueGenerator.GenerateCompressible()
 		} else {
-			payload = make([]byte, pw.config.messageSize)
+			payload = pw.config.valueGenerator.GenerateRandom()
 		}
 	}
 
