@@ -104,6 +104,7 @@ type ValueGenerator struct {
 	Compressible         bool
 	TombstoneProbability float64
 	RandomData           []byte
+	ProduceRandomBytes   bool
 }
 
 var compressible_payload []byte

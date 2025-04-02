@@ -35,7 +35,7 @@ type ProducerConfig struct {
 }
 
 func NewProducerConfig(wc worker.WorkerConfig, name string, nPartitions int32,
-	messageSize int, messageCount int, fakeTimestampMs int64, fakeTimestampStepMs int64, rateLimitBytes int, keySetCardinality int, messagesPerProducerId int, tombstoneProbability float64) ProducerConfig {
+	messageSize int, messageCount int, fakeTimestampMs int64, fakeTimestampStepMs int64, rateLimitBytes int, keySetCardinality int, messagesPerProducerId int, tombstoneProbability float64, produceRandomBytes bool) ProducerConfig {
 	return ProducerConfig{
 		workerCfg:             wc,
 		name:                  name,
@@ -52,6 +52,7 @@ func NewProducerConfig(wc worker.WorkerConfig, name string, nPartitions int32,
 			PayloadSize:          uint64(messageSize),
 			Compressible:         wc.CompressiblePayload,
 			TombstoneProbability: tombstoneProbability,
+			ProduceRandomBytes:   produceRandomBytes,
 		},
 	}
 }
@@ -134,6 +135,9 @@ func (pw *ProducerWorker) newRecord(producerId int, sequence int64) *kgo.Record 
 			payload = value.Bytes()
 		} else if pw.config.valueGenerator.Compressible {
 			payload = pw.config.valueGenerator.GenerateCompressible()
+		} else if pw.config.valueGenerator.ProduceRandomBytes {
+			payload = make([]byte, pw.config.valueGenerator.PayloadSize)
+			rand.Read(payload)
 		} else {
 			payload = pw.config.valueGenerator.GenerateRandom()
 		}
