@@ -62,8 +62,6 @@ type ProducerWorker struct {
 	validOffsets        TopicOffsetRanges
 	latestValueProduced LatestValueMap
 
-	payload []byte
-
 	// Used for enabling transactional produces
 	transactionsEnabled  bool
 	transactionSTMConfig worker.TransactionSTMConfig
@@ -94,7 +92,6 @@ func NewProducerWorker(cfg ProducerConfig) ProducerWorker {
 		Status:                NewProducerWorkerStatus(cfg.workerCfg.Topic),
 		latestValueProduced:   NewLatestValueMap(cfg.workerCfg.Topic, cfg.nPartitions),
 		validOffsets:          validOffsets,
-		payload:               cfg.valueGenerator.Generate(),
 		churnProducers:        cfg.messagesPerProducerId > 0,
 		tolerateDataLoss:      cfg.workerCfg.TolerateDataLoss,
 		tolerateFailedProduce: cfg.workerCfg.TolerateFailedProduce,
