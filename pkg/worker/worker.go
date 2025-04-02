@@ -107,48 +107,56 @@ type ValueGenerator struct {
 
 var compressible_payload []byte
 
+func (vg *ValueGenerator) GenerateRandom() []byte {
+	randBytes := make([]byte, vg.PayloadSize)
+	// An incompressible high entropy payload. This will likely not be UTF-8 decodable.
+	n, err := rand.Read(randBytes)
+	if err != nil {
+		panic(err.Error())
+	}
+	if n != int(vg.PayloadSize) {
+		panic("Unexpected byte count from rand.Read")
+	}
+	// Convert to a valid UTF-8 string, replacing bad chars with " ".
+	// A valid UTF-8 string is needed to avoid any decoding issues
+	// for services on the consuming end.
+	payload := []byte(strings.ToValidUTF8(string(randBytes), " "))
+
+	// In converting to valid UTF-8, we may have lost some bytes.
+	// Append back the difference.
+	diff := int(vg.PayloadSize) - len(payload)
+	if diff > 0 {
+		payload = append(payload, make([]byte, diff)...)
+	}
+	return payload
+}
+
+func (vg *ValueGenerator) GenerateCompressible() []byte {
+	// Zeros, which is about as compressible as an array can be.
+	if len(compressible_payload) == 0 {
+		compressible_payload = make([]byte, vg.PayloadSize)
+	} else if len(compressible_payload) != int(vg.PayloadSize) {
+		// This is an implementation shortcut that lets us use a simple
+		// global array of zeros for compressible payloads, as long
+		// as everyone wants the same size.
+		panic("Can't have multiple compressible generators of different sizes")
+	}
+
+	// Everyone who asks for compressible payload gets a ref to the same array
+	// of zeros: this is worthwhile because a compressible producer might do
+	// huge message sizes (e.g. 128MIB of zeros compresses down to <1MiB.
+	return compressible_payload
+}
+
 func (vg *ValueGenerator) Generate() []byte {
 	isTombstone := rand.Float64() < vg.TombstoneProbability
 	if isTombstone {
 		return nil
 	}
 	if vg.Compressible {
-		// Zeros, which is about as compressible as an array can be.
-		if len(compressible_payload) == 0 {
-			compressible_payload = make([]byte, vg.PayloadSize)
-		} else if len(compressible_payload) != int(vg.PayloadSize) {
-			// This is an implementation shortcut that lets us use a simple
-			// global array of zeros for compressible payloads, as long
-			// as everyone wants the same size.
-			panic("Can't have multiple compressible generators of different sizes")
-		}
-
-		// Everyone who asks for compressible payload gets a ref to the same array
-		// of zeros: this is worthwhile because a compressible producer might do
-		// huge message sizes (e.g. 128MIB of zeros compresses down to <1MiB.
-		return compressible_payload
+		return vg.GenerateCompressible()
 	} else {
-		randBytes := make([]byte, vg.PayloadSize)
-		// An incompressible high entropy payload. This will likely not be UTF-8 decodable.
-		n, err := rand.Read(randBytes)
-		if err != nil {
-			panic(err.Error())
-		}
-		if n != int(vg.PayloadSize) {
-			panic("Unexpected byte count from rand.Read")
-		}
-		// Convert to a valid UTF-8 string, replacing bad chars with " ".
-		// A valid UTF-8 string is needed to avoid any decoding issues
-		// for services on the consuming end.
-		payload := []byte(strings.ToValidUTF8(string(randBytes), " "))
-
-		// In converting to valid UTF-8, we may have lost some bytes.
-		// Append back the difference.
-		diff := int(vg.PayloadSize) - len(payload)
-		if diff > 0 {
-			payload = append(payload, make([]byte, diff)...)
-		}
-		return payload
+		return vg.GenerateRandom()
 	}
 }
 
