@@ -35,7 +35,7 @@ type ProducerConfig struct {
 }
 
 func NewProducerConfig(wc worker.WorkerConfig, name string, nPartitions int32,
-	messageSize int, messageCount int, fakeTimestampMs int64, fakeTimestampStepMs int64, rateLimitBytes int, keySetCardinality int, messagesPerProducerId int, tombstoneProbability float64) ProducerConfig {
+	messageSize int, messageCount int, fakeTimestampMs int64, fakeTimestampStepMs int64, rateLimitBytes int, keySetCardinality int, messagesPerProducerId int, tombstoneProbability float64, produceRandomBytes bool) ProducerConfig {
 	return ProducerConfig{
 		workerCfg:             wc,
 		name:                  name,
@@ -52,6 +52,7 @@ func NewProducerConfig(wc worker.WorkerConfig, name string, nPartitions int32,
 			PayloadSize:          uint64(messageSize),
 			Compressible:         wc.CompressiblePayload,
 			TombstoneProbability: tombstoneProbability,
+			ProduceRandomBytes:   produceRandomBytes,
 		},
 	}
 }
@@ -61,8 +62,6 @@ type ProducerWorker struct {
 	Status              ProducerWorkerStatus
 	validOffsets        TopicOffsetRanges
 	latestValueProduced LatestValueMap
-
-	payload []byte
 
 	// Used for enabling transactional produces
 	transactionsEnabled  bool
@@ -94,7 +93,6 @@ func NewProducerWorker(cfg ProducerConfig) ProducerWorker {
 		Status:                NewProducerWorkerStatus(cfg.workerCfg.Topic),
 		latestValueProduced:   NewLatestValueMap(cfg.workerCfg.Topic, cfg.nPartitions),
 		validOffsets:          validOffsets,
-		payload:               cfg.valueGenerator.Generate(),
 		churnProducers:        cfg.messagesPerProducerId > 0,
 		tolerateDataLoss:      cfg.workerCfg.TolerateDataLoss,
 		tolerateFailedProduce: cfg.workerCfg.TolerateFailedProduce,
@@ -135,8 +133,13 @@ func (pw *ProducerWorker) newRecord(producerId int, sequence int64) *kgo.Record 
 				value.Write(make([]byte, paddingSize))
 			}
 			payload = value.Bytes()
+		} else if pw.config.valueGenerator.Compressible {
+			payload = pw.config.valueGenerator.GenerateCompressible()
+		} else if pw.config.valueGenerator.ProduceRandomBytes {
+			payload = make([]byte, pw.config.valueGenerator.PayloadSize)
+			rand.Read(payload)
 		} else {
-			payload = make([]byte, pw.config.messageSize)
+			payload = pw.config.valueGenerator.GenerateRandom()
 		}
 	}
 
