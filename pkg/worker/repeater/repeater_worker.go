@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math/rand"
 	_ "net/http/pprof"
@@ -29,6 +30,7 @@ import (
 
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"golang.org/x/time/rate"
 
@@ -374,6 +376,14 @@ loop:
 
 		if v.transactionsEnabled {
 			if _, err := v.transactionSTM.BeforeMessageSent(); err != nil {
+				if errors.Is(err, kerr.OperationNotAttempted) {
+					// Try to recover this producer by rolling back the transaction.
+					err = v.transactionSTM.TryRollbackTransaction()
+					if err == nil {
+						continue
+					}
+				}
+
 				log.Errorf("Produce error; transaction failure: %v", err)
 				break loop
 			}
@@ -430,6 +440,18 @@ loop:
 			// consumer needs logic to handle the unexpected token
 			log.Debugf("Produce %s acked %d on partition %d offset %d", v.config.workerCfg.Name, token, r.Partition, r.Offset)
 			if err != nil {
+				// For transactions an INVALID_TXN_STATE is encountered often while restarting nodes
+				// Try to be tolerant of this error.
+				// TODO: Is there a way to avoid this?
+				if v.transactionsEnabled && (errors.Is(err, kerr.OperationNotAttempted) || errors.Is(err, kerr.InvalidTxnState)) {
+					err = v.transactionSTM.TryRollbackTransaction()
+					if err == nil {
+						v.pending <- token
+						ackWait.Done()
+						return
+					}
+				}
+
 				// On produce error, we drop the token: we rely on producer errors
 				// being rare and/or a background Tuner re-injecting fresh tokens
 				log.Errorf("Produce %s error, dropped token %d: %v", v.config.workerCfg.Name, token, err)
@@ -440,6 +462,7 @@ loop:
 				v.globalStats.Ack_latency.Update(ackLatency.Microseconds())
 				v.totalProduced += 1
 			}
+
 			ackWait.Done()
 		}
 
