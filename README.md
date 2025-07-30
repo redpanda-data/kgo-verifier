@@ -1,6 +1,6 @@
 # All development of kgo-verifier has moved to https://github.com/redpanda-data/redpanda
 
-This repository has been put in archive mode for to retain history.
+This repository has been put in archive mode to retain history.
 
 # kgo-verifier & kgo-repeater
 
